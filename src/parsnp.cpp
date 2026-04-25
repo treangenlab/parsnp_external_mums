@@ -2458,6 +2458,83 @@ bool Aligner::setInterClusterRegions( void )
     this->clusters.insert(this->clusters.begin(), interclusters.begin(),interclusters.end());
     return 1;
 }
+/////////////////////////////////////////
+// Aligner::setFinalClustersFromTSV
+// Load outside MUM locations from a TSV file and build LCBs.
+//
+// Format (one MUM per line, lines starting with '#' are ignored):
+//   genome0_pos \t genome1_pos \t genomen_pos \t length \t strand_str
+//
+// strand_str is a string of n '1'/'0' characters, one per genome.
+// '1' = forward match, '0' = reverse-complement match. ex. "110" means genomes 0 and 1 are forward, genome 2 is reverse.
+// if strand_str omitted all genomes are assumed forward.
+/////////////////////////////////////////
+void Aligner::setFinalClustersFromTSV(string tsvPath)
+{
+    ifstream is(tsvPath.c_str());
+    if (!is.good()) {
+        cerr << "ERROR: cannot open external MUM file: " << tsvPath << endl;
+        return;
+    }
+
+    string line;
+    int loaded = 0;
+    while (getline(is, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        istringstream ss(line);
+        vector<long> startpos;
+
+        for (ssize i = 0; i < this->n; i++) {
+            long pos;
+            if (!(ss >> pos)) { startpos.clear(); break; }
+            startpos.push_back(pos);
+        }
+        if ((ssize)startpos.size() != this->n) continue;
+
+        long length;
+        if (!(ss >> length)) continue;
+
+        string strand_str;
+        vector<int> forward;
+        if ((ss >> strand_str) && (ssize)strand_str.size() == this->n) {
+            for (char c : strand_str)
+                forward.push_back(c == '1' ? 1 : 0);
+        } else {
+            for (ssize i = 0; i < this->n; i++)
+                forward.push_back(1);
+        }
+
+        TMum mum(startpos, length);
+        mum.isforward = forward;
+
+        for (ssize k = 0; k < this->n; k++) {
+            long lo = mum.start[k];
+            long hi = mum.end[k];
+            long limit = (long)this->genomes.at(k).size();
+            if (lo < 0 || hi > limit) {
+                cerr << "WARNING: MUM at position " << lo
+                     << " (length " << length << ") out of bounds for genome "
+                     << k << " (size " << limit << "), skipping\n";
+                goto next_mum;
+            }
+            for (long m = lo; m < hi; m++)
+                this->mumlayout[k][m] = 1;
+        }
+        mum.slength = 10000; // no parent region so this is just a placeholder
+        this->anchors.push_back(mum);
+        this->mums.push_back(mum);
+        this->clusters.push_back(Cluster(mum));
+        loaded++;
+        next_mum:;
+    }
+    is.close();
+
+    cerr << "Loaded " << loaded << " MUMs from " << tsvPath << endl;
+    this->m0 = (int)this->mums.size();
+    this->setFinalClusters();
+}
+
 // {{{ void Aligner::setFinalClusters(string mumFileName)
 /////////////////////////////////////////
 // Aligner::setFinalClusters
@@ -2817,7 +2894,7 @@ int main ( int argc, char* argv[] )
     float diag_diff = 1.0;
     int random=0;
     float factor;
-    string mums,anchors,anchorfile,mumfile,prefix,outdir;
+    string mums,anchors,anchorfile,mumfile,extmumfile,prefix,outdir;
     bool reverseRef=false,reverse=false,anchorsOnly=false;
     bool reverseQuery=false;
     bool shustring = false;
@@ -2889,6 +2966,7 @@ int main ( int argc, char* argv[] )
     extendmums = iniFile.GetValueB( "MUM","extendmums");
     mums = iniFile.GetValue( "MUM","mums");
     mumfile = iniFile.GetValue( "MUM","mumfile");
+    extmumfile = iniFile.GetValue( "MUM","extmumfile");
     random = iniFile.GetValueI( "MUM","filter");
     factor = iniFile.GetValueF( "MUM","factor");
     //factor = 1.5;
@@ -3202,7 +3280,7 @@ int main ( int argc, char* argv[] )
             return 0;
         }
     }
-    else if ( ! mumfile.size() )
+    else if ( ! mumfile.size() && ! extmumfile.size() )
         mumsfound = align.setInitialClusters();
     
     if (calc_mumi)
@@ -3213,14 +3291,14 @@ int main ( int argc, char* argv[] )
     dif = difftime (end,start);
     align.anchorTime = dif;    
     time ( &start);
-    if ( ! anchorsOnly && ! mumfile.size() && ! shustring)
+    if ( ! anchorsOnly && ! mumfile.size() && ! extmumfile.size() && ! shustring)
     {
         cerr << "Performing recursive MUM search between MUM anchors..." << endl;
         mumsfound = align.doWork();
     }
     time ( &end);
     
-    if ( !mumsfound && !mumfile.size())
+    if ( !mumsfound && !mumfile.size() && !extmumfile.size())
     {
         
         mfile << "NO MUMS FOUND" << endl;
@@ -3237,7 +3315,7 @@ int main ( int argc, char* argv[] )
     printf("        Finished recursive MUM search, elapsed time: %.0lf seconds\n\n", dif );
     align.coarsenTime = dif;
     
-    if ( random && ! mumfile.size() )
+    if ( random && ! mumfile.size() && ! extmumfile.size() )
     {
         cerr << "Filtering spurious matches..." << endl;
         time ( &start);
@@ -3255,14 +3333,18 @@ int main ( int argc, char* argv[] )
     time ( &start);
     
     cerr << "Creating and verifying final LCBs..." << endl;
-    if( mumfile.size())
+    if( extmumfile.size())
+        align.setFinalClustersFromTSV(extmumfile);
+    else if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
         align.setFinalClusters();
-    
+
     align.filterRandomClustersSimple1();
-    
-    if( mumfile.size())
+
+    if( extmumfile.size())
+        align.setFinalClusters();
+    else if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
         align.setFinalClusters();

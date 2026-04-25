@@ -440,6 +440,16 @@ def parse_args():
         type = int,
         default = 21,
         help = "Minimum cluster size")
+    MUM_search_args.add_argument(
+        "--external-mums",
+        type = str,
+        default = None,
+        metavar = "FILE",
+        help = "TSV file of externally-computed MUM locations (skips internal MUM search). "
+               "Format: genome0_pos<TAB>genome1_pos[...]<TAB>length<TAB>strand_str, "
+               "where strand_str is one 1/0 per genome (e.g. '11' or '10'). "
+               "1 = forward, 0 = reverse complement. "
+               "Lines starting with '#' are ignored.")
     #TODO -z was a duplicate flag but no longer parsed as min-lcb-size in the current parsnp version
     # MUM_search_args.add_argument(
             # "-z",
@@ -1117,6 +1127,8 @@ def write_inifile_2(inifiled, outputDir, unaligned, args, auto_ref, query, final
     inifiled = inifiled.replace("$FILES\n", file_string)
     # new, output unaligned regions
     inifiled = inifiled.replace("$UNALIGNED", unaligned)
+    if args.external_mums:
+        inifiled = inifiled.replace("extmumfile=", "extmumfile=%s" % os.path.abspath(args.external_mums))
     inifiled_closest = inifiled.replace("$FILES\n", file_string_closest)
     if fastmum:
         inifiled = inifiled.replace("p=%d" % (0.2 * reflen), "p=%s" % (args.max_partition_size))
