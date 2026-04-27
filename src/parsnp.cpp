@@ -2472,6 +2472,7 @@ bool Aligner::setInterClusterRegions( void )
 /////////////////////////////////////////
 void Aligner::setFinalClustersFromTSV(string tsvPath)
 {
+    std::cout << "Hello, World!" << std::endl; 
     ifstream is(tsvPath.c_str());
     if (!is.good()) {
         cerr << "ERROR: cannot open external MUM file: " << tsvPath << endl;
@@ -2548,6 +2549,7 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
     cerr << "Loaded " << loaded << " MUMs from " << tsvPath << endl;
     this->m0 = (int)this->mums.size();
     this->setFinalClusters();
+    std::cout << "Hello, World!" << std::endl; 
 }
 
 // {{{ void Aligner::setFinalClusters(string mumFileName)
@@ -3357,9 +3359,7 @@ int main ( int argc, char* argv[] )
 
     align.filterRandomClustersSimple1();
 
-    if( extmumfile.size())
-        align.setFinalClustersFromTSV(extmumfile);
-    else if( mumfile.size())
+    if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
         align.setFinalClusters();
