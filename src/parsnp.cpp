@@ -2474,84 +2474,212 @@ bool Aligner::setInterClusterRegions( void )
 /////////////////////////////////////////
 void Aligner::setFinalClustersFromTSV(string tsvPath)
 {
-    std::cout << "Hello, World!" << std::endl; 
     ifstream is(tsvPath.c_str());
     if (!is.good()) {
         cerr << "ERROR: cannot open external MUM file: " << tsvPath << endl;
         return;
     }
 
-    std::cout << "Hello, World!" << std::endl; 
+    struct ExtMum {
+        long length;
+        vector<long> pos;
+        vector<int> forward;
+    };
 
+    vector<ExtMum> extmums;
     string line;
-    int loaded = 0;
+
     while (getline(is, line)) {
         if (line.empty() || line[0] == '#') continue;
 
         istringstream ss(line);
 
-        // Field 1: length
-        long length;
-        if (!(ss >> length)) continue;
+        ExtMum em;
+        if (!(ss >> em.length)) continue;
 
-        // Field 2: comma-delimited positions
         string pos_field;
         if (!(ss >> pos_field)) continue;
 
-        vector<long> startpos;
         bool skip = false;
-        istringstream pos_ss(pos_field);
         string token;
-        while (getline(pos_ss, token, ',')) {
-            if (token.empty()) { skip = true; break; }
-            startpos.push_back(atol(token.c_str()));
-        }
-        if (skip || (ssize)startpos.size() != this->n) continue;
+        istringstream pos_ss(pos_field);
 
-        // Field 3: comma-delimited strand indicators 
+        while (getline(pos_ss, token, ',')) {
+            if (token.empty()) {
+                skip = true;
+                break;
+            }
+            em.pos.push_back(atol(token.c_str()));
+        }
+
+        if (skip || (ssize)em.pos.size() != this->n) continue;
+
         string strand_field;
-        vector<int> forward;
         if (ss >> strand_field) {
             istringstream strand_ss(strand_field);
-            while (getline(strand_ss, token, ','))
-                forward.push_back(token == "+" ? 1 : 0);
-            if ((ssize)forward.size() != this->n) {
-                forward.clear();
-                for (ssize i = 0; i < this->n; i++) forward.push_back(1);
+            while (getline(strand_ss, token, ',')) {
+                em.forward.push_back(token == "+" ? 1 : 0);
             }
-        } else {
-            for (ssize i = 0; i < this->n; i++) forward.push_back(1);
         }
 
-        TMum mum(startpos, length);
+        if ((ssize)em.forward.size() != this->n) {
+            em.forward.clear();
+            for (ssize i = 0; i < this->n; i++)
+                em.forward.push_back(1);
+        }
+
+        extmums.push_back(em);
+    }
+
+    is.close();
+
+    if (extmums.empty()) {
+        cerr << "ERROR: no valid external MUMs loaded from " << tsvPath << endl;
+        return;
+    }
+
+    /*
+     * Infer mapping:
+     *
+     * map[parsnp_index] = external_mum_column
+     *
+     * We score each possible pairing by checking whether the sequence at that
+     * external MUM column matches the reference-column MUM sequence.
+     *
+     * This fixes cases where Parsnp internally reorders input genomes.
+     */
+    vector<vector<int> > score(this->n, vector<int>(this->n, 0));
+
+    int tested = 0;
+    for (size_t r = 0; r < extmums.size() && tested < 200; r++) {
+        ExtMum &em = extmums[r];
+
+        if (em.length <= 0) continue;
+
+        long ref_pos = em.pos[0];
+        if (ref_pos < 0 || ref_pos + em.length > (long)this->genomes[0].size())
+            continue;
+
+        string ref_seq = this->genomes[0].substr(ref_pos, em.length);
+        if (!em.forward[0])
+            ref_seq = reversec(ref_seq);
+
+        for (ssize parsnp_i = 0; parsnp_i < this->n; parsnp_i++) {
+            for (ssize mum_col = 0; mum_col < this->n; mum_col++) {
+                long p = em.pos[mum_col];
+
+                if (p < 0 || p + em.length > (long)this->genomes[parsnp_i].size())
+                    continue;
+
+                string chunk = this->genomes[parsnp_i].substr(p, em.length);
+                if (!em.forward[mum_col])
+                    chunk = reversec(chunk);
+
+                if (chunk == ref_seq)
+                    score[parsnp_i][mum_col]++;
+            }
+        }
+
+        tested++;
+    }
+
+    vector<int> perm(this->n);
+    for (ssize i = 0; i < this->n; i++)
+        perm[i] = i;
+
+    vector<int> best = perm;
+    int best_score = -1;
+
+    do {
+        if (perm[0] != 0) continue; // reference must stay column 0
+
+        int s = 0;
+        for (ssize i = 0; i < this->n; i++)
+            s += score[i][perm[i]];
+
+        if (s > best_score) {
+            best_score = s;
+            best = perm;
+        }
+    } while (next_permutation(perm.begin(), perm.end()));
+
+    cerr << "External MUM column mapping inferred:" << endl;
+    for (ssize i = 0; i < this->n; i++) {
+        cerr << "  Parsnp genome " << i
+             << " (" << this->fasta.at(i) << ")"
+             << " <- external MUM column " << best[i] << endl;
+    }
+
+    int loaded = 0;
+
+    for (size_t r = 0; r < extmums.size(); r++) {
+        ExtMum &em = extmums[r];
+
+        vector<long> startpos(this->n);
+        vector<int> forward(this->n);
+
+        for (ssize k = 0; k < this->n; k++) {
+            int src = best[k];
+            startpos[k] = em.pos[src];
+            forward[k] = em.forward[src];
+        }
+
+        TMum mum(startpos, em.length);
         mum.isforward = forward;
+
+        bool bad = false;
 
         for (ssize k = 0; k < this->n; k++) {
             long lo = mum.start[k];
             long hi = mum.end[k];
             long limit = (long)this->genomes.at(k).size();
+
             if (lo < 0 || hi > limit) {
                 cerr << "WARNING: MUM at position " << lo
-                     << " (length " << length << ") out of bounds for genome "
-                     << k << " (size " << limit << "), skipping\n";
-                goto next_mum;
+                     << " (length " << em.length << ") out of bounds for genome "
+                     << k << " (size " << limit << "), skipping" << endl;
+                bad = true;
+                break;
             }
-            for (long m = lo; m < hi; m++)
+        }
+
+        if (bad) continue;
+
+        // Sanity check: after remapping, this must be an actual exact match.
+        string ref_seq = this->genomes[0].substr(mum.start[0], mum.length);
+        if (!mum.isforward[0])
+            ref_seq = reversec(ref_seq);
+
+        for (ssize k = 1; k < this->n; k++) {
+            string chunk = this->genomes[k].substr(mum.start[k], mum.length);
+            if (!mum.isforward[k])
+                chunk = reversec(chunk);
+
+            if (chunk != ref_seq) {
+                cerr << "WARNING: external MUM failed exact-match validation after remapping; skipping" << endl;
+                bad = true;
+                break;
+            }
+        }
+
+        if (bad) continue;
+
+        for (ssize k = 0; k < this->n; k++) {
+            for (long m = mum.start[k]; m < mum.end[k]; m++)
                 this->mumlayout[k][m] = 1;
         }
+
         mum.slength = 10000;
         this->anchors.push_back(mum);
         this->mums.push_back(mum);
         this->clusters.push_back(Cluster(mum));
         loaded++;
-        next_mum:;
     }
-    is.close();
 
-    cerr << "Loaded " << loaded << " MUMs from " << tsvPath << endl;
+    cerr << "Loaded " << loaded << " validated external MUMs from " << tsvPath << endl;
+
     this->m0 = (int)this->mums.size();
     this->setFinalClusters();
-    std::cout << "Hello, World!" << std::endl; 
 }
 
 // {{{ void Aligner::setFinalClusters(string mumFileName)
