@@ -2474,7 +2474,7 @@ bool Aligner::setInterClusterRegions( void )
 /////////////////////////////////////////
 void Aligner::setFinalClustersFromTSV(string tsvPath)
 {
-    std::print("Hello, {}!\n", "World");
+    std::cout << "Hello, World!" << std::endl;
     ifstream is(tsvPath.c_str());
     if (!is.good()) {
         cerr << "ERROR: cannot open external MUM file: " << tsvPath << endl;
