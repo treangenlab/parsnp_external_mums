@@ -919,6 +919,7 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
     }
 
     int prev_end = 0;
+    int written_cluster_number = 0;
     for ( ssize z = 0; z < allclusters.size(); z++)
     {
         Cluster ct = allclusters.at(z);
@@ -953,7 +954,8 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
 
             if (tempalign2[z][0].size() > this->c * 1)
             {
-                sprintf(b,"%d",(int)z+1);// C-style string formed without null
+                written_cluster_number++;
+                sprintf(b,"%d", written_cluster_number);// sequential, not raw z+1
                 ofstream clcbfile;
                 if (recomb_filter)
                 {
