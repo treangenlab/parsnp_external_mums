@@ -46,6 +46,8 @@ VERSION = __version__
 PHI_WINDOWSIZE = 1000
 TOTSEQS=0
 PARSNP_DIR = sys.path[0]
+_CONDA_HARVESTTOOLS = "/opt/miniconda3/envs/parsnp2/bin/harvesttools"
+HARVESTTOOLS = _CONDA_HARVESTTOOLS if os.path.exists(_CONDA_HARVESTTOOLS) else "harvesttools"
 
 
 
@@ -706,7 +708,8 @@ def check_for_dependencies(use_phipack, use_fasttree):
     '''
     missing = False
     exe = "harvesttools"
-    if shutil.which(exe) is None:
+    CONDA_HARVESTTOOLS = "/opt/miniconda3/envs/parsnp2/bin/harvesttools"
+    if shutil.which(exe) is None and not os.path.exists(CONDA_HARVESTTOOLS):
         missing = True
         logger.critical("{} not in system path!".format(exe))
     if use_phipack:
@@ -1160,12 +1163,13 @@ def run_parsnp_aligner(outputDir):
         # rc = run_command(command, ignorerc=1, stdout=stdout_f, stderr=stderr_f, prepend_time=True)
     rc = run_logged_command(command=command, ignorerc=1, label="parsnp-aligner", outputDir=outputDir)
 
-    if not os.path.exists(os.path.join(outputDir, "parsnpAligner.xmfa")) or rc != 0:
+    xmfa_path = os.path.join(outputDir, "parsnpAligner.xmfa")
+    if not os.path.exists(xmfa_path):
         logger.critical("Set of filtered genomes are too divergent for parsnp, please use stricter ANI thresholds for filtering")
     else:
-        shutil.move(
-                os.path.join(outputDir, "parsnpAligner.xmfa"),
-                os.path.join(outputDir, "parsnp.xmfa"))
+        if rc != 0:
+            logger.warning("parsnp_core exited with non-zero status but xmfa was produced, continuing...")
+        shutil.move(xmfa_path, os.path.join(outputDir, "parsnp.xmfa"))
     return rc
 
 
@@ -1784,28 +1788,28 @@ SETTINGS:
 
     #add genbank here, if present
     if len(genbank_ref) != 0:
-        rnc = f"harvesttools -q -o {outputDir}/parsnp.ggr -x {parsnp_output}"
+        rnc = f"{HARVESTTOOLS} -q -o {outputDir}/parsnp.ggr -x {parsnp_output}"
         for file in genbank_files:
             rnc += " -g %s " %(file)
         command = rnc
     else:
-        command = f"harvesttools -q -o {outputDir}/parsnp.ggr -f {ref} -x {parsnp_output}"
+        command = f"{HARVESTTOOLS} -q -o {outputDir}/parsnp.ggr -f {ref} -x {parsnp_output}"
 
     # Harvest seems to fail sometimes when piping to stderr/stdout...
     run_command(command)
 
     if recomb_filter:
-        command = "harvesttools -q -b %s/parsnp.rec,REC,\"PhiPack\" -o %s/parsnp.ggr -i %s/parsnp.ggr"%(outputDir,outputDir,outputDir)
+        command = f"{HARVESTTOOLS} -q -b {outputDir}/parsnp.rec,REC,\"PhiPack\" -o {outputDir}/parsnp.ggr -i {outputDir}/parsnp.ggr"
         run_command(command)
 
     run_logged_command(
-        f"harvesttools -i {outputDir}/parsnp.ggr -S {outputDir}/parsnp.snps.mblocks",
+        f"{HARVESTTOOLS} -i {outputDir}/parsnp.ggr -S {outputDir}/parsnp.snps.mblocks",
         outputDir=outputDir,
         label="harvest-mblocks")
 
     if generate_vcf:
         run_logged_command(
-            f"harvesttools -q -i {outputDir}/parsnp.ggr -V {outputDir+os.sep}parsnp.vcf", 
+            f"{HARVESTTOOLS} -q -i {outputDir}/parsnp.ggr -V {outputDir+os.sep}parsnp.vcf", 
             outputDir, label="harvest-vcf")
         with open(f"{outputDir}/parsnp.vcf", 'r') as vcf_orig:
             vcf_contents = vcf_orig.read()
@@ -1865,7 +1869,7 @@ SETTINGS:
             if recomb_filter or 1:
                 #if newick available, add
                 #new flag to update branch lengths
-                run_command("harvesttools --midpoint-reroot -u -q -i "+outputDir+os.sep+"parsnp.ggr -o "+outputDir+os.sep+"parsnp.ggr -n %s"%(outputDir+os.sep+"parsnp.tree "))
+                run_command("{HARVESTTOOLS} --midpoint-reroot -u -q -i "+outputDir+os.sep+"parsnp.ggr -o "+outputDir+os.sep+"parsnp.ggr -n %s"%(outputDir+os.sep+"parsnp.tree "))
 
 
     t2 = time.time()

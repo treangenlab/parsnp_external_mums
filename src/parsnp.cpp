@@ -2478,6 +2478,8 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
         return;
     }
 
+    std::cout << "Hello, World!" << std::endl; 
+
     string line;
     int loaded = 0;
     while (getline(is, line)) {
@@ -3356,7 +3358,7 @@ int main ( int argc, char* argv[] )
     align.filterRandomClustersSimple1();
 
     if( extmumfile.size())
-        align.setFinalClusters();
+        align.setFinalClustersFromTSV(extmumfile);
     else if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
