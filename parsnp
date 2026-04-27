@@ -1130,8 +1130,10 @@ def write_inifile_2(inifiled, outputDir, unaligned, args, auto_ref, query, final
     inifiled = inifiled.replace("$FILES\n", file_string)
     # new, output unaligned regions
     inifiled = inifiled.replace("$UNALIGNED", unaligned)
+    logger.debug(f"external_mums value: {args.external_mums!r}")
     if args.external_mums:
         inifiled = inifiled.replace("extmumfile=", "extmumfile=%s" % os.path.abspath(args.external_mums))
+        logger.debug(f"Set extmumfile to: {os.path.abspath(args.external_mums)}")
     inifiled_closest = inifiled.replace("$FILES\n", file_string_closest)
     if fastmum:
         inifiled = inifiled.replace("p=%d" % (0.2 * reflen), "p=%s" % (args.max_partition_size))
