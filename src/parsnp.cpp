@@ -1031,7 +1031,7 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
                         int offset = 0;
                         if (hdr1 == ""){
                             hdr1 = "s1";
-                            offset = -1;
+                            offset = 0;
                         } // Cannot have empty header very hard to parse
                         else if (hdr1 != "s1") 
                         {
