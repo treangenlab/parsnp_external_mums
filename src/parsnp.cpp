@@ -2460,14 +2460,15 @@ bool Aligner::setInterClusterRegions( void )
 }
 /////////////////////////////////////////
 // Aligner::setFinalClustersFromTSV
-// Load outside MUM locations from a TSV file and build LCBs.
+// Load MUM locations from a mumemto .mums file and build LCBs.
 //
-// Format (one MUM per line, lines starting with '#' are ignored):
-//   genome0_pos \t genome1_pos \t genomen_pos \t length \t strand_str
+// Format matches mumemto output (one MUM per line, lines starting with '#' are ignored):
+//   length \t pos0,pos1,...,posN \t strand0,strand1,...,strandN
 //
-// strand_str is a string of n '1'/'0' characters, one per genome.
-// '1' = forward match, '0' = reverse-complement match. ex. "110" means genomes 0 and 1 are forward, genome 2 is reverse.
-// if strand_str omitted all genomes are assumed forward.
+// Positions are 0-based offsets within each sequence, in the same order as the
+// input filelist passed to parsnp. Strand is '+' (forward) or '-' (reverse complement).
+// Strand field is optional; all genomes are assumed forward if omitted.
+// Lines where any position is empty (mumemto partial MUMs via -k) are skipped.
 /////////////////////////////////////////
 void Aligner::setFinalClustersFromTSV(string tsvPath)
 {
@@ -2483,26 +2484,38 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
         if (line.empty() || line[0] == '#') continue;
 
         istringstream ss(line);
-        vector<long> startpos;
 
-        for (ssize i = 0; i < this->n; i++) {
-            long pos;
-            if (!(ss >> pos)) { startpos.clear(); break; }
-            startpos.push_back(pos);
-        }
-        if ((ssize)startpos.size() != this->n) continue;
-
+        // Field 1: length
         long length;
         if (!(ss >> length)) continue;
 
-        string strand_str;
+        // Field 2: comma-delimited positions
+        string pos_field;
+        if (!(ss >> pos_field)) continue;
+
+        vector<long> startpos;
+        bool skip = false;
+        istringstream pos_ss(pos_field);
+        string token;
+        while (getline(pos_ss, token, ',')) {
+            if (token.empty()) { skip = true; break; }
+            startpos.push_back(atol(token.c_str()));
+        }
+        if (skip || (ssize)startpos.size() != this->n) continue;
+
+        // Field 3: comma-delimited strand indicators 
+        string strand_field;
         vector<int> forward;
-        if ((ss >> strand_str) && (ssize)strand_str.size() == this->n) {
-            for (char c : strand_str)
-                forward.push_back(c == '1' ? 1 : 0);
+        if (ss >> strand_field) {
+            istringstream strand_ss(strand_field);
+            while (getline(strand_ss, token, ','))
+                forward.push_back(token == "+" ? 1 : 0);
+            if ((ssize)forward.size() != this->n) {
+                forward.clear();
+                for (ssize i = 0; i < this->n; i++) forward.push_back(1);
+            }
         } else {
-            for (ssize i = 0; i < this->n; i++)
-                forward.push_back(1);
+            for (ssize i = 0; i < this->n; i++) forward.push_back(1);
         }
 
         TMum mum(startpos, length);
@@ -2521,7 +2534,7 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
             for (long m = lo; m < hi; m++)
                 this->mumlayout[k][m] = 1;
         }
-        mum.slength = 10000; // no parent region so this is just a placeholder
+        mum.slength = 10000;
         this->anchors.push_back(mum);
         this->mums.push_back(mum);
         this->clusters.push_back(Cluster(mum));

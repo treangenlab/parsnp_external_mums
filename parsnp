@@ -445,11 +445,11 @@ def parse_args():
         type = str,
         default = None,
         metavar = "FILE",
-        help = "TSV file of externally-computed MUM locations (skips internal MUM search). "
-               "Format: genome0_pos<TAB>genome1_pos[...]<TAB>length<TAB>strand_str, "
-               "where strand_str is one 1/0 per genome (e.g. '11' or '10'). "
-               "1 = forward, 0 = reverse complement. "
-               "Lines starting with '#' are ignored.")
+        help = "mumemto .mums file of externally-computed MUM locations (skips internal MUM search). "
+               "Format: length<TAB>pos0,pos1,...<TAB>strand0,strand1,... "
+               "Positions are 0-based, in the same order as input genomes. "
+               "Strand is +/-. Lines starting with '#' are ignored. "
+               "Partial MUMs (empty position entries) are skipped.")
     #TODO -z was a duplicate flag but no longer parsed as min-lcb-size in the current parsnp version
     # MUM_search_args.add_argument(
             # "-z",
