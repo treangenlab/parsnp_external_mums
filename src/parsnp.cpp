@@ -2512,16 +2512,11 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
             em.pos.push_back(atol(token.c_str()));
         }
 
-        if (skip || (ssize)em.pos.size() != this->n) {
-            static bool printed = false;
-            if (!printed) {
-                cerr << "DEBUG: skipping MUM line: pos count=" << em.pos.size()
-                     << " expected this->n=" << this->n
-                     << " (skip=" << skip << ")" << endl;
-                printed = true;
-            }
-            continue;
-        }
+        ssize expected_cols = (ssize)em.pos.size();
+        if (skip) continue;
+        if (expected_cols != this->n && expected_cols != this->n - 1) continue;
+
+        ssize ncols = expected_cols;
 
         string strand_field;
         if (ss >> strand_field) {
@@ -2531,9 +2526,9 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
             }
         }
 
-        if ((ssize)em.forward.size() != this->n) {
+        if ((ssize)em.forward.size() != ncols) {
             em.forward.clear();
-            for (ssize i = 0; i < this->n; i++)
+            for (ssize i = 0; i < ncols; i++)
                 em.forward.push_back(1);
         }
 
@@ -2547,49 +2542,73 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
         return;
     }
 
-    // Identity mapping: column j in the MUM file corresponds to parsnp genome j.
-    // This is correct because parsnp preserves filesystem order when --external-mums
-    // is provided (sort+shuffle is skipped), matching the order mumemto sees.
-    vector<int> best(this->n);
-    for (ssize i = 0; i < this->n; i++)
-        best[i] = i;
+    bool no_ref_col = ((ssize)extmums[0].pos.size() == this->n - 1);
+    if (no_ref_col)
+        cerr << "External MUM file has " << (this->n - 1) << " columns (queries only); "
+             << "will locate reference positions by sequence search" << endl;
 
-    int loaded = 0;
+    // Identity mapping: column j -> parsnp genome j (with ref col) or genome j+1 (queries only).
+    // Correct because parsnp preserves filesystem order when --external-mums is provided.
+    int loaded = 0, skipped_bounds = 0, skipped_ref = 0, skipped_mismatch = 0;
 
     for (size_t r = 0; r < extmums.size(); r++) {
         ExtMum &em = extmums[r];
 
-        vector<long> startpos(this->n);
-        vector<int> forward(this->n);
+        vector<long> startpos(this->n, -1);
+        vector<int> forward(this->n, 1);
 
-        for (ssize k = 0; k < this->n; k++) {
-            int src = best[k];
-            startpos[k] = em.pos[src];
-            forward[k] = em.forward[src];
+        ssize ncols = (ssize)em.pos.size();
+        bool bad = false;
+        for (ssize j = 0; j < ncols; j++) {
+            int g = no_ref_col ? (int)(j + 1) : (int)j;
+            startpos[g] = em.pos[j];
+            forward[g] = em.forward[j];
+            if (startpos[g] < 0 || startpos[g] + em.length > (long)this->genomes[g].size()) {
+                bad = true; break;
+            }
+        }
+        if (bad) { skipped_bounds++; continue; }
+
+        if (no_ref_col) {
+            // Find the reference position by searching for the MUM sequence in genome[0].
+            string mum_seq = this->genomes[1].substr(startpos[1], em.length);
+            if (!forward[1]) mum_seq = reversec(mum_seq);
+
+            const string &ref = this->genomes[0];
+            long ref_pos = -1;
+            int ref_fwd = 1;
+
+            size_t hit = ref.find(mum_seq);
+            if (hit != string::npos && ref.find(mum_seq, hit + 1) == string::npos) {
+                ref_pos = (long)hit; ref_fwd = 1;
+            } else {
+                string mum_rc = reversec(mum_seq);
+                hit = ref.find(mum_rc);
+                if (hit != string::npos && ref.find(mum_rc, hit + 1) == string::npos) {
+                    ref_pos = (long)hit; ref_fwd = 0;
+                }
+            }
+
+            if (ref_pos < 0) { skipped_ref++; continue; }
+            startpos[0] = ref_pos;
+            forward[0] = ref_fwd;
         }
 
         TMum mum(startpos, em.length);
         mum.isforward = forward;
 
-        bool bad = false;
-
+        bad = false;
         for (ssize k = 0; k < this->n; k++) {
             long lo = mum.start[k];
             long hi = mum.end[k];
             long limit = (long)this->genomes.at(k).size();
-
             if (lo < 0 || hi > limit) {
-                cerr << "WARNING: MUM at position " << lo
-                     << " (length " << em.length << ") out of bounds for genome "
-                     << k << " (size " << limit << "), skipping" << endl;
-                bad = true;
-                break;
+                bad = true; break;
             }
         }
+        if (bad) { skipped_bounds++; continue; }
 
-        if (bad) continue;
-
-        // Sanity check: after remapping, this must be an actual exact match.
+        // Sanity check: all genomes must have the identical sequence at their assigned position.
         string ref_seq = this->genomes[0].substr(mum.start[0], mum.length);
         if (!mum.isforward[0])
             ref_seq = reversec(ref_seq);
@@ -2600,13 +2619,11 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
                 chunk = reversec(chunk);
 
             if (chunk != ref_seq) {
-                cerr << "WARNING: external MUM failed exact-match validation after remapping; skipping" << endl;
-                bad = true;
-                break;
+                bad = true; break;
             }
         }
 
-        if (bad) continue;
+        if (bad) { skipped_mismatch++; continue; }
 
         for (ssize k = 0; k < this->n; k++) {
             for (long m = mum.start[k]; m < mum.end[k]; m++)
@@ -2621,6 +2638,9 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
     }
 
     cerr << "Loaded " << loaded << " validated external MUMs from " << tsvPath << endl;
+    if (skipped_bounds   > 0) cerr << "  Skipped " << skipped_bounds   << " (position out of bounds)" << endl;
+    if (skipped_ref      > 0) cerr << "  Skipped " << skipped_ref      << " (not uniquely found in reference)" << endl;
+    if (skipped_mismatch > 0) cerr << "  Skipped " << skipped_mismatch << " (sequence mismatch)" << endl;
 
     this->m0 = (int)this->mums.size();
 }
