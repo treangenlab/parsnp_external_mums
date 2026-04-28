@@ -1032,6 +1032,44 @@ def parse_input_files(input_files, curated, validate_input):
     return input_files, fnafiles, fnaf_sizes
 
 
+def order_by_mums_lengths(mums_path, finalfiles, ref):
+    lengths_path = os.path.splitext(mums_path)[0] + '.lengths'
+    if not os.path.exists(lengths_path):
+        logger.warning(f"No .lengths file found at {lengths_path}; genome ordering may not match MUM file columns")
+        return finalfiles
+
+    seen = set()
+    mums_order = []
+    with open(lengths_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            genome_path = line.split()[0]
+            if genome_path not in seen:
+                seen.add(genome_path)
+                mums_order.append(genome_path)
+
+    ref_abs = os.path.abspath(ref)
+    mums_order = [p for p in mums_order if os.path.abspath(p) != ref_abs]
+
+    abs_to_final = {os.path.abspath(f): f for f in finalfiles}
+    stem_to_final = {Path(f).stem: f for f in finalfiles}
+
+    reordered = []
+    for genome_path in mums_order:
+        f = abs_to_final.get(os.path.abspath(genome_path)) or stem_to_final.get(Path(genome_path).stem)
+        if f and f not in reordered:
+            reordered.append(f)
+
+    for f in finalfiles:
+        if f not in reordered:
+            logger.warning(f"{Path(f).name} not found in .lengths file, appending at end")
+            reordered.append(f)
+
+    return reordered
+
+
 def write_inifile_1(args, ref, aligner, recomb_filter, output_dir, fastmum, reflen, fnafiles, threads):
     '''
     Writes the first .ini file. Starts with 'template.ini' in the parsnp folder and replaces various
@@ -1524,7 +1562,9 @@ SETTINGS:
                 ffo.write(f"{seq}\n")
         ref = auto_ref
 
-    if not args.external_mums:
+    if args.external_mums:
+        finalfiles = order_by_mums_lengths(args.external_mums, finalfiles, ref)
+    else:
         finalfiles = sorted(finalfiles)
         random_seeded.shuffle(finalfiles)
     totseqs = len(finalfiles) + 1 # Add one to include reference
