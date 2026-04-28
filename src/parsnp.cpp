@@ -2642,6 +2642,11 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
     if (skipped_ref      > 0) cerr << "  Skipped " << skipped_ref      << " (not uniquely found in reference)" << endl;
     if (skipped_mismatch > 0) cerr << "  Skipped " << skipped_mismatch << " (sequence mismatch)" << endl;
 
+    if (loaded == 0) {
+        cerr << "ERROR: 0 external MUMs passed validation, cannot continue." << endl;
+        exit(1);
+    }
+
     this->m0 = (int)this->mums.size();
 }
 
@@ -3390,27 +3395,33 @@ int main ( int argc, char* argv[] )
             return 0;
         }
     }
-    else if ( ! mumfile.size() && ! extmumfile.size() )
+    else if ( extmumfile.size() )
+    {
+        cerr << "Loading external MUMs as anchors..." << endl;
+        align.setFinalClustersFromTSV(extmumfile);
+        mumsfound = 1;
+    }
+    else if ( ! mumfile.size() )
         mumsfound = align.setInitialClusters();
-    
+
     if (calc_mumi)
         exit(0);
-    
+
     time ( &end );
-    
+
     dif = difftime (end,start);
-    align.anchorTime = dif;    
+    align.anchorTime = dif;
     time ( &start);
-    if ( ! anchorsOnly && ! mumfile.size() && ! extmumfile.size() && ! shustring)
+    if ( ! anchorsOnly && ! mumfile.size() && ! shustring)
     {
         cerr << "Performing recursive MUM search between MUM anchors..." << endl;
         mumsfound = align.doWork();
     }
     time ( &end);
-    
-    if ( !mumsfound && !mumfile.size() && !extmumfile.size())
+
+    if ( !mumsfound && !mumfile.size())
     {
-        
+
         mfile << "NO MUMS FOUND" << endl;
         mfile.close();
         return 0;
@@ -3420,32 +3431,30 @@ int main ( int argc, char* argv[] )
         mfile << "MUMS FOUND" << endl;
         mfile.close();
     }
-    
+
     dif = difftime (end,start);
     printf("        Finished recursive MUM search, elapsed time: %.0lf seconds\n\n", dif );
     align.coarsenTime = dif;
-    
-    if ( random && ! mumfile.size() && ! extmumfile.size() )
+
+    if ( random && ! mumfile.size() )
     {
         cerr << "Filtering spurious matches..." << endl;
         time ( &start);
         align.random = random;
         align.filterRandom1(random);
-        
+
         //align.filterRandom();
         time ( &end);
         dif = difftime(end,start);
         printf("        Finished filtering spurious matches, elapsed time: %.0lf seconds\n\n",dif);
         align.randomTime = dif;
     }
-    
-    
+
+
     time ( &start);
-    
+
     cerr << "Creating and verifying final LCBs..." << endl;
-    if( extmumfile.size())
-        align.setFinalClustersFromTSV(extmumfile);
-    else if( mumfile.size())
+    if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
         align.setFinalClusters();
@@ -3454,7 +3463,7 @@ int main ( int argc, char* argv[] )
 
     if( mumfile.size())
         align.setFinalClusters(mumfile);
-    else if( !extmumfile.size())
+    else
         align.setFinalClusters();
 
     align.setInterClusterRegions();
