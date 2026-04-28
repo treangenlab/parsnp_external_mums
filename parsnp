@@ -1530,8 +1530,10 @@ SETTINGS:
 
     #initiate parallelPhiPack tasks
     #3)run parsnp (cores, grid?)
-    if args.no_partition or len(finalfiles) < 2*args.min_partition_size:
-        if not args.no_partition and len(finalfiles) < 2*args.min_partition_size:
+    if args.no_partition or args.external_mums or len(finalfiles) < 2*args.min_partition_size:
+        if args.external_mums and not args.no_partition:
+            logger.info("External MUMs file provided; skipping partitioning (MUM positions are indexed to the full genome set).")
+        elif not args.no_partition and len(finalfiles) < 2*args.min_partition_size:
             logger.info(f"Too few genomes to run partitions of size >{args.min_partition_size}. Running all genomes at once.")
         # Editing the ini file to be used for parnsp-aligner (which is different from parsnip as a mumi finder)
         if not inifile_exists:

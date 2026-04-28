@@ -3492,7 +3492,7 @@ int main ( int argc, char* argv[] )
 
     if( mumfile.size())
         align.setFinalClusters(mumfile);
-    else
+    else if( !extmumfile.size())
         align.setFinalClusters();
 
     align.setInterClusterRegions();
