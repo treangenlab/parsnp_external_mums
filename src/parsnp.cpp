@@ -2513,7 +2513,16 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
             em.pos.push_back(atol(token.c_str()));
         }
 
-        if (skip || (ssize)em.pos.size() != this->n) continue;
+        if (skip || (ssize)em.pos.size() != this->n) {
+            static bool printed = false;
+            if (!printed) {
+                cerr << "DEBUG: skipping MUM line: pos count=" << em.pos.size()
+                     << " expected this->n=" << this->n
+                     << " (skip=" << skip << ")" << endl;
+                printed = true;
+            }
+            continue;
+        }
 
         string strand_field;
         if (ss >> strand_field) {
