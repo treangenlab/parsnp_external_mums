@@ -2547,77 +2547,12 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
         return;
     }
 
-    /*
-     * Infer mapping:
-     *
-     * map[parsnp_index] = external_mum_column
-     *
-     * We score each possible pairing by checking whether the sequence at that
-     * external MUM column matches the reference-column MUM sequence.
-     *
-     * This fixes cases where Parsnp internally reorders input genomes.
-     */
-    vector<vector<int> > score(this->n, vector<int>(this->n, 0));
-
-    int tested = 0;
-    for (size_t r = 0; r < extmums.size() && tested < 200; r++) {
-        ExtMum &em = extmums[r];
-
-        if (em.length <= 0) continue;
-
-        long ref_pos = em.pos[0];
-        if (ref_pos < 0 || ref_pos + em.length > (long)this->genomes[0].size())
-            continue;
-
-        string ref_seq = this->genomes[0].substr(ref_pos, em.length);
-        if (!em.forward[0])
-            ref_seq = reversec(ref_seq);
-
-        for (ssize parsnp_i = 0; parsnp_i < this->n; parsnp_i++) {
-            for (ssize mum_col = 0; mum_col < this->n; mum_col++) {
-                long p = em.pos[mum_col];
-
-                if (p < 0 || p + em.length > (long)this->genomes[parsnp_i].size())
-                    continue;
-
-                string chunk = this->genomes[parsnp_i].substr(p, em.length);
-                if (!em.forward[mum_col])
-                    chunk = reversec(chunk);
-
-                if (chunk == ref_seq)
-                    score[parsnp_i][mum_col]++;
-            }
-        }
-
-        tested++;
-    }
-
-    vector<int> perm(this->n);
+    // Identity mapping: column j in the MUM file corresponds to parsnp genome j.
+    // This is correct because parsnp preserves filesystem order when --external-mums
+    // is provided (sort+shuffle is skipped), matching the order mumemto sees.
+    vector<int> best(this->n);
     for (ssize i = 0; i < this->n; i++)
-        perm[i] = i;
-
-    vector<int> best = perm;
-    int best_score = -1;
-
-    do {
-        if (perm[0] != 0) continue; // reference must stay column 0
-
-        int s = 0;
-        for (ssize i = 0; i < this->n; i++)
-            s += score[i][perm[i]];
-
-        if (s > best_score) {
-            best_score = s;
-            best = perm;
-        }
-    } while (next_permutation(perm.begin(), perm.end()));
-
-    cerr << "External MUM column mapping inferred:" << endl;
-    for (ssize i = 0; i < this->n; i++) {
-        cerr << "  Parsnp genome " << i
-             << " (" << this->fasta.at(i) << ")"
-             << " <- external MUM column " << best[i] << endl;
-    }
+        best[i] = i;
 
     int loaded = 0;
 
