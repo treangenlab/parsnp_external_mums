@@ -1524,8 +1524,9 @@ SETTINGS:
                 ffo.write(f"{seq}\n")
         ref = auto_ref
 
-    finalfiles = sorted(finalfiles)
-    random_seeded.shuffle(finalfiles)
+    if not args.external_mums:
+        finalfiles = sorted(finalfiles)
+        random_seeded.shuffle(finalfiles)
     totseqs = len(finalfiles) + 1 # Add one to include reference
 
     #initiate parallelPhiPack tasks
