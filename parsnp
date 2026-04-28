@@ -1063,7 +1063,7 @@ def order_by_mums_lengths(mums_path, finalfiles, ref):
             reordered.append(f)
 
     for f in finalfiles:
-        if f not in reordered:
+        if f not in reordered and os.path.abspath(f) != ref_abs:
             logger.warning(f"{Path(f).name} not found in .lengths file, appending at end")
             reordered.append(f)
 
