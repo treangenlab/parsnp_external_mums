@@ -1061,6 +1061,9 @@ def compute_mum_perm(mums_order, finalfiles, ref):
     """
     ref_abs = os.path.abspath(ref)
     ref_name = Path(ref).name
+    # Strip ".ref" suffix that parsnp appends during reference contig-length sorting
+    if ref_name.endswith('.ref'):
+        ref_name = ref_name[:-4]
     abs_final = {os.path.abspath(f): i + 1 for i, f in enumerate(finalfiles)}
     stem_final = {Path(f).stem: i + 1 for i, f in enumerate(finalfiles)}
     perm = []

@@ -2568,10 +2568,20 @@ void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
 
     // perm[j] = parsnp genome index for MUM column j (written by Python from .lengths file).
     // Falls back to identity mapping if perm is empty (no .lengths file found).
-    int loaded = 0, skipped_bounds = 0, skipped_ref = 0, skipped_mismatch = 0;
+
+    // Compute min anchor size the same way setMums1 does for the initial full-genome search,
+    // so that external MUMs below the --min-anchor-length threshold are excluded.
+    string anchor_sOutput;
+    Converter(this->minanchor, anchor_sOutput, 80);
+    int min_anchor_len = int(ceil(Calculator(anchor_sOutput, anchor_sOutput.length(),
+                                             (float)this->genomes[0].size())));
+
+    int loaded = 0, skipped_bounds = 0, skipped_ref = 0, skipped_mismatch = 0, skipped_short = 0;
 
     for (size_t r = 0; r < extmums.size(); r++) {
         ExtMum &em = extmums[r];
+
+        if (em.length < min_anchor_len) { skipped_short++; continue; }
 
         vector<long> startpos(this->n, -1);
         vector<int> forward(this->n, 1);
@@ -2661,6 +2671,7 @@ void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
     }
 
     cerr << "Loaded " << loaded << " validated external MUMs from " << tsvPath << endl;
+    if (skipped_short    > 0) cerr << "  Skipped " << skipped_short    << " (shorter than --min-anchor-length " << min_anchor_len << ")" << endl;
     if (skipped_bounds   > 0) cerr << "  Skipped " << skipped_bounds   << " (position out of bounds)" << endl;
     if (skipped_ref      > 0) cerr << "  Skipped " << skipped_ref      << " (not uniquely found in reference)" << endl;
     if (skipped_mismatch > 0) cerr << "  Skipped " << skipped_mismatch << " (sequence mismatch)" << endl;
