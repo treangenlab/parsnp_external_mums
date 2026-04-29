@@ -1383,8 +1383,7 @@ SETTINGS:
     # Uses biopython to parse the inputs (just checking it again)
     input_files, fnafiles, fnaf_sizes = parse_input_files(input_files, curated, args.validate_input)
 
-    # if ref in fnafiles:
-        # fnafiles.remove(ref)
+    fnafiles = [f for f in fnafiles if os.path.abspath(f) != os.path.abspath(ref)]
 
     #sort reference by largest replicon to smallest
     if sortem and os.path.exists(ref) and not autopick_ref:
