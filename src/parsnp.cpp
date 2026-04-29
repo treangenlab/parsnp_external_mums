@@ -1098,6 +1098,25 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
     log <<  setw(2) << "q value:   " << setw(2) << this->q << endl << endl;
     log << setw(2) << "Mum anchor size:   " << setw(2) << this->l << endl;
     log << setw(2) <<"Number of MUM anchors found:   "<< setw(2) << this->m0 << endl;
+    ofstream mumdump((this->outdir + "/debug_final_mums.tsv").c_str());
+
+    for (size_t mi = 0; mi < this->mums.size(); mi++) {
+        TMum mt = this->mums.at(mi);
+
+        mumdump << mi << "\t" << mt.length;
+
+        for (ssize k = 0; k < this->n; k++) {
+            mumdump << "\t" << mt.start.at(k);
+        }
+
+        for (ssize k = 0; k < this->n; k++) {
+            mumdump << "\t" << (mt.isforward.at(k) ? "+" : "-");
+        }
+
+        mumdump << "\n";
+    }
+
+    mumdump.close();
     if((this->mums.size()+this->filtered)>=this->m0)
         log << setw(2) <<  "Number of MUMs found:   "   << setw(2) << (this->mums.size()+this->filtered)-(this->m0) << endl;
     else
