@@ -1040,6 +1040,7 @@ def read_mums_lengths_order(mums_path, ref):
         return None
 
     ref_abs = os.path.abspath(ref)
+    ref_name = Path(ref).name
     seen = set()
     mums_order = []
     with open(lengths_path) as f:
@@ -1050,7 +1051,9 @@ def read_mums_lengths_order(mums_path, ref):
             genome_path = line.split()[0]
             if genome_path not in seen:
                 seen.add(genome_path)
-                if os.path.abspath(genome_path) != ref_abs:
+                is_ref = (os.path.abspath(genome_path) == ref_abs or
+                          Path(genome_path).name == ref_name)
+                if not is_ref:
                     mums_order.append(genome_path)
     return mums_order
 
