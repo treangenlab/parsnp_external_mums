@@ -1033,14 +1033,12 @@ def parse_input_files(input_files, curated, validate_input):
 
 
 def read_mums_lengths_order(mums_path, ref):
-    """Return mumemto's genome order (excluding ref) from the .lengths file, or None if not found."""
+    """Return mumemto's genome order (including ref) from the .lengths file, or None if not found."""
     lengths_path = os.path.splitext(mums_path)[0] + '.lengths'
     if not os.path.exists(lengths_path):
         logger.warning(f"No .lengths file found at {lengths_path}; MUM column mapping may be wrong")
         return None
 
-    ref_abs = os.path.abspath(ref)
-    ref_name = Path(ref).name
     seen = set()
     mums_order = []
     with open(lengths_path) as f:
@@ -1051,27 +1049,32 @@ def read_mums_lengths_order(mums_path, ref):
             genome_path = line.split()[0]
             if genome_path not in seen:
                 seen.add(genome_path)
-                is_ref = (os.path.abspath(genome_path) == ref_abs or
-                          Path(genome_path).name == ref_name)
-                if not is_ref:
-                    mums_order.append(genome_path)
+                mums_order.append(genome_path)
     return mums_order
 
 
-def compute_mum_perm(mums_order, finalfiles):
+def compute_mum_perm(mums_order, finalfiles, ref):
     """
     Compute column→genome permutation for setFinalClustersFromTSV.
-    perm[j] = parsnp genome index (1-based, since 0 is reference) for MUM file column j.
+    perm[j] = parsnp genome index (0 for reference, 1-based for queries) for MUM file column j.
+    The .mums file includes the reference as column 0, so the permutation must cover all columns.
     """
+    ref_abs = os.path.abspath(ref)
+    ref_name = Path(ref).name
     abs_final = {os.path.abspath(f): i + 1 for i, f in enumerate(finalfiles)}
     stem_final = {Path(f).stem: i + 1 for i, f in enumerate(finalfiles)}
     perm = []
     for genome_path in mums_order:
-        idx = abs_final.get(os.path.abspath(genome_path)) or stem_final.get(Path(genome_path).stem)
-        if idx is None:
-            logger.warning(f"{Path(genome_path).name} from .lengths not found in query genomes; permutation may be wrong")
-            idx = 0
-        perm.append(idx)
+        is_ref = (os.path.abspath(genome_path) == ref_abs or
+                  Path(genome_path).name == ref_name)
+        if is_ref:
+            perm.append(0)
+        else:
+            idx = abs_final.get(os.path.abspath(genome_path)) or stem_final.get(Path(genome_path).stem)
+            if idx is None:
+                logger.warning(f"{Path(genome_path).name} from .lengths not found in query genomes; permutation may be wrong")
+                idx = 0
+            perm.append(idx)
     return perm
 
 
@@ -1575,7 +1578,7 @@ SETTINGS:
     if args.external_mums:
         mums_order = read_mums_lengths_order(args.external_mums, ref)
         if mums_order:
-            args._mum_perm = compute_mum_perm(mums_order, finalfiles)
+            args._mum_perm = compute_mum_perm(mums_order, finalfiles, ref)
             logger.info("Computed MUM column permutation from .lengths file.")
         else:
             args._mum_perm = []
