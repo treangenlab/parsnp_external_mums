@@ -2472,7 +2472,7 @@ bool Aligner::setInterClusterRegions( void )
 // Strand field is optional; all genomes are assumed forward if omitted.
 // Lines where any position is empty (mumemto partial MUMs via -k) are skipped.
 /////////////////////////////////////////
-void Aligner::setFinalClustersFromTSV(string tsvPath)
+void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
 {
     ifstream is(tsvPath.c_str());
     if (!is.good()) {
@@ -2547,8 +2547,8 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
         cerr << "External MUM file has " << (this->n - 1) << " columns (queries only); "
              << "will locate reference positions by sequence search" << endl;
 
-    // Identity mapping: column j -> parsnp genome j (with ref col) or genome j+1 (queries only).
-    // Correct because parsnp preserves filesystem order when --external-mums is provided.
+    // perm[j] = parsnp genome index for MUM column j (written by Python from .lengths file).
+    // Falls back to identity mapping if perm is empty (no .lengths file found).
     int loaded = 0, skipped_bounds = 0, skipped_ref = 0, skipped_mismatch = 0;
 
     for (size_t r = 0; r < extmums.size(); r++) {
@@ -2560,7 +2560,11 @@ void Aligner::setFinalClustersFromTSV(string tsvPath)
         ssize ncols = (ssize)em.pos.size();
         bool bad = false;
         for (ssize j = 0; j < ncols; j++) {
-            int g = no_ref_col ? (int)(j + 1) : (int)j;
+            int g;
+            if (!perm.empty() && j < (ssize)perm.size())
+                g = perm[j];
+            else
+                g = no_ref_col ? (int)(j + 1) : (int)j;
             startpos[g] = em.pos[j];
             forward[g] = em.forward[j];
             if (startpos[g] < 0 || startpos[g] + em.length > (long)this->genomes[g].size()) {
@@ -3082,6 +3086,16 @@ int main ( int argc, char* argv[] )
     mums = iniFile.GetValue( "MUM","mums");
     mumfile = iniFile.GetValue( "MUM","mumfile");
     extmumfile = iniFile.GetValue( "MUM","extmumfile");
+    string mumperm_str = iniFile.GetValue( "MUM","mumperm");
+    vector<int> mum_perm;
+    if (!mumperm_str.empty()) {
+        istringstream pss(mumperm_str);
+        string tok;
+        while (getline(pss, tok, ',')) {
+            if (!tok.empty())
+                mum_perm.push_back(atoi(tok.c_str()));
+        }
+    }
     random = iniFile.GetValueI( "MUM","filter");
     factor = iniFile.GetValueF( "MUM","factor");
     //factor = 1.5;
@@ -3398,7 +3412,7 @@ int main ( int argc, char* argv[] )
     else if ( extmumfile.size() )
     {
         cerr << "Loading external MUMs as anchors..." << endl;
-        align.setFinalClustersFromTSV(extmumfile);
+        align.setFinalClustersFromTSV(extmumfile, mum_perm);
         mumsfound = 1;
     }
     else if ( ! mumfile.size() )

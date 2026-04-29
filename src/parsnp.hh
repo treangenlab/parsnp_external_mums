@@ -120,7 +120,7 @@ public:
     bool setInitialClusters(string);
     void setFinalClusters(void);
     void setFinalClusters(string);
-    void setFinalClustersFromTSV(string);
+    void setFinalClustersFromTSV(string, vector<int> perm = vector<int>());
     bool setInterClusterRegions(void);
     static void shuffleSeq(string &seq,int diff);
     static void getSubseq(string seq,int start,int end);

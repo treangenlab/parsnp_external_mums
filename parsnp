@@ -1032,12 +1032,14 @@ def parse_input_files(input_files, curated, validate_input):
     return input_files, fnafiles, fnaf_sizes
 
 
-def order_by_mums_lengths(mums_path, finalfiles, ref):
+def read_mums_lengths_order(mums_path, ref):
+    """Return mumemto's genome order (excluding ref) from the .lengths file, or None if not found."""
     lengths_path = os.path.splitext(mums_path)[0] + '.lengths'
     if not os.path.exists(lengths_path):
-        logger.warning(f"No .lengths file found at {lengths_path}; genome ordering may not match MUM file columns")
-        return finalfiles
+        logger.warning(f"No .lengths file found at {lengths_path}; MUM column mapping may be wrong")
+        return None
 
+    ref_abs = os.path.abspath(ref)
     seen = set()
     mums_order = []
     with open(lengths_path) as f:
@@ -1048,26 +1050,26 @@ def order_by_mums_lengths(mums_path, finalfiles, ref):
             genome_path = line.split()[0]
             if genome_path not in seen:
                 seen.add(genome_path)
-                mums_order.append(genome_path)
+                if os.path.abspath(genome_path) != ref_abs:
+                    mums_order.append(genome_path)
+    return mums_order
 
-    ref_abs = os.path.abspath(ref)
-    mums_order = [p for p in mums_order if os.path.abspath(p) != ref_abs]
 
-    abs_to_final = {os.path.abspath(f): f for f in finalfiles}
-    stem_to_final = {Path(f).stem: f for f in finalfiles}
-
-    reordered = []
+def compute_mum_perm(mums_order, finalfiles):
+    """
+    Compute column→genome permutation for setFinalClustersFromTSV.
+    perm[j] = parsnp genome index (1-based, since 0 is reference) for MUM file column j.
+    """
+    abs_final = {os.path.abspath(f): i + 1 for i, f in enumerate(finalfiles)}
+    stem_final = {Path(f).stem: i + 1 for i, f in enumerate(finalfiles)}
+    perm = []
     for genome_path in mums_order:
-        f = abs_to_final.get(os.path.abspath(genome_path)) or stem_to_final.get(Path(genome_path).stem)
-        if f and f not in reordered:
-            reordered.append(f)
-
-    for f in finalfiles:
-        if f not in reordered and os.path.abspath(f) != ref_abs:
-            logger.warning(f"{Path(f).name} not found in .lengths file, appending at end")
-            reordered.append(f)
-
-    return reordered
+        idx = abs_final.get(os.path.abspath(genome_path)) or stem_final.get(Path(genome_path).stem)
+        if idx is None:
+            logger.warning(f"{Path(genome_path).name} from .lengths not found in query genomes; permutation may be wrong")
+            idx = 0
+        perm.append(idx)
+    return perm
 
 
 def write_inifile_1(args, ref, aligner, recomb_filter, output_dir, fastmum, reflen, fnafiles, threads):
@@ -1172,6 +1174,10 @@ def write_inifile_2(inifiled, outputDir, unaligned, args, auto_ref, query, final
     if args.external_mums:
         inifiled = inifiled.replace("extmumfile=", "extmumfile=%s" % os.path.abspath(args.external_mums))
         logger.debug(f"Set extmumfile to: {os.path.abspath(args.external_mums)}")
+        if hasattr(args, '_mum_perm') and args._mum_perm:
+            perm_str = ','.join(str(x) for x in args._mum_perm)
+            inifiled = inifiled.replace("mumperm=", "mumperm=%s" % perm_str)
+            logger.debug(f"Set mumperm: {perm_str[:80]}...")
     inifiled_closest = inifiled.replace("$FILES\n", file_string_closest)
     if fastmum:
         inifiled = inifiled.replace("p=%d" % (0.2 * reflen), "p=%s" % (args.max_partition_size))
@@ -1562,11 +1568,15 @@ SETTINGS:
                 ffo.write(f"{seq}\n")
         ref = auto_ref
 
+    finalfiles = sorted(finalfiles)
+    random_seeded.shuffle(finalfiles)
     if args.external_mums:
-        finalfiles = order_by_mums_lengths(args.external_mums, finalfiles, ref)
-    else:
-        finalfiles = sorted(finalfiles)
-        random_seeded.shuffle(finalfiles)
+        mums_order = read_mums_lengths_order(args.external_mums, ref)
+        if mums_order:
+            args._mum_perm = compute_mum_perm(mums_order, finalfiles)
+            logger.info("Computed MUM column permutation from .lengths file.")
+        else:
+            args._mum_perm = []
     totseqs = len(finalfiles) + 1 # Add one to include reference
 
     #initiate parallelPhiPack tasks
