@@ -1859,20 +1859,30 @@ SETTINGS:
         command = f"{HARVESTTOOLS} -q -o {outputDir}/parsnp.ggr -f {ref} -x {parsnp_output}"
 
     # Harvest seems to fail sometimes when piping to stderr/stdout...
-    run_command(command)
+    # When --external-mums is used, harvesttools may crash on alignment blocks whose
+    # sequences differ across genomes; treat failure as non-fatal so the XMFA is kept.
+    ggr_path = f"{outputDir}/parsnp.ggr"
+    ggr_rc = run_command(command, ignorerc=1)
+    ggr_ok = (ggr_rc == 0 and os.path.exists(ggr_path) and os.path.getsize(ggr_path) > 0)
+    if not ggr_ok:
+        logger.warning(
+            "harvesttools XMFA → GGR conversion failed (exit code %d). "
+            "parsnp.ggr will not be produced; SNP blocks and VCF will be skipped. "
+            "parsnp.xmfa is still available for downstream analysis." % ggr_rc)
 
-    if recomb_filter:
+    if ggr_ok and recomb_filter:
         command = f"{HARVESTTOOLS} -q -b {outputDir}/parsnp.rec,REC,\"PhiPack\" -o {outputDir}/parsnp.ggr -i {outputDir}/parsnp.ggr"
         run_command(command)
 
-    run_logged_command(
-        f"{HARVESTTOOLS} -i {outputDir}/parsnp.ggr -S {outputDir}/parsnp.snps.mblocks",
-        outputDir=outputDir,
-        label="harvest-mblocks")
-
-    if generate_vcf:
+    if ggr_ok:
         run_logged_command(
-            f"{HARVESTTOOLS} -q -i {outputDir}/parsnp.ggr -V {outputDir+os.sep}parsnp.vcf", 
+            f"{HARVESTTOOLS} -i {outputDir}/parsnp.ggr -S {outputDir}/parsnp.snps.mblocks",
+            outputDir=outputDir,
+            label="harvest-mblocks")
+
+    if ggr_ok and generate_vcf:
+        run_logged_command(
+            f"{HARVESTTOOLS} -q -i {outputDir}/parsnp.ggr -V {outputDir+os.sep}parsnp.vcf",
             outputDir, label="harvest-vcf")
         with open(f"{outputDir}/parsnp.vcf", 'r') as vcf_orig:
             vcf_contents = vcf_orig.read()
@@ -1880,7 +1890,7 @@ SETTINGS:
             vcf_fixed.write("##fileformat=VCFv4.2\n")
             vcf_fixed.write(vcf_contents)
 
-    if not args.skip_phylogeny:
+    if not args.skip_phylogeny and ggr_ok:
         logger.info("Reconstructing core genome phylogeny...")
         mblocks_seqs = SeqIO.parse(os.path.join(outputDir, "parsnp.snps.mblocks"), "fasta")
         for seq in mblocks_seqs:
