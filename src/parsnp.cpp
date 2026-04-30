@@ -2584,7 +2584,7 @@ void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
 
     int loaded = 0;
     int skipped_short = 0, skipped_bounds_perm = 0, skipped_bounds_mum = 0;
-    int skipped_ref = 0, skipped_mismatch = 0;
+    int skipped_ref = 0;
 
     for (size_t r = 0; r < extmums.size(); r++) {
         ExtMum &em = extmums[r];
@@ -2680,41 +2680,6 @@ void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
             continue;
         }
 
-        // Sanity check: all genomes must have the identical sequence at their assigned position.
-        string ref_seq = this->genomes[0].substr(mum.start[0], mum.length);
-        if (!mum.isforward[0])
-            ref_seq = reversec(ref_seq);
-
-        bad = false;
-        int mismatch_k = -1;
-        string mismatch_chunk;
-        for (ssize k = 1; k < this->n; k++) {
-            string chunk = this->genomes[k].substr(mum.start[k], mum.length);
-            if (!mum.isforward[k])
-                chunk = reversec(chunk);
-
-            if (chunk != ref_seq) {
-                bad = true; mismatch_k = k; mismatch_chunk = chunk; break;
-            }
-        }
-
-        if (bad) {
-            skipped_mismatch++;
-            if (rlog.is_open()) {
-                string ref_snip  = ref_seq.substr(0, min((int)ref_seq.size(),  20));
-                string got_snip  = mismatch_chunk.substr(0, min((int)mismatch_chunk.size(), 20));
-                char strand_k    = mum.isforward[mismatch_k] ? '+' : '-';
-                rlog << row << "\t" << em.length << "\tmismatch\t" << mismatch_k
-                     << "\t" << mum.start[mismatch_k]
-                     << "\t" << this->genomes[mismatch_k].size()
-                     << "\tstrand=" << strand_k
-                     << ",ref_pos=" << mum.start[0]
-                     << ",expected=" << ref_snip
-                     << ",got=" << got_snip << "\n";
-            }
-            continue;
-        }
-
         for (ssize k = 0; k < this->n; k++) {
             for (long m = mum.start[k]; m < mum.end[k]; m++)
                 this->mumlayout[k][m] = 1;
@@ -2729,12 +2694,11 @@ void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
 
     if (rlog.is_open()) rlog.close();
 
-    cerr << "Loaded " << loaded << " validated external MUMs from " << tsvPath << endl;
+    cerr << "Loaded " << loaded << " external MUMs from " << tsvPath << endl;
     if (skipped_short        > 0) cerr << "  Skipped " << skipped_short        << " (shorter than --min-anchor-length " << min_anchor_len << ")" << endl;
     if (skipped_bounds_perm  > 0) cerr << "  Skipped " << skipped_bounds_perm  << " (position out of bounds during column→genome mapping)" << endl;
     if (skipped_bounds_mum   > 0) cerr << "  Skipped " << skipped_bounds_mum   << " (position out of bounds after TMum construction)" << endl;
     if (skipped_ref          > 0) cerr << "  Skipped " << skipped_ref          << " (reference position not uniquely found)" << endl;
-    if (skipped_mismatch     > 0) cerr << "  Skipped " << skipped_mismatch     << " (sequence mismatch)" << endl;
     cerr << "  Rejection details: " << reject_log_path << endl;
 
     if (loaded == 0) {
