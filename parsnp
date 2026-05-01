@@ -753,7 +753,7 @@ def create_output_directory(output_dir, overwrite=False):
     if os.path.exists(output_dir):
         if overwrite:
             logger.warning(f"Output directory {output_dir} exists, all results will be overwritten")
-            shutil.rmtree(output_dir)
+            shutil.rmtree(output_dir, ignore_errors=True)
         else:
             logger.critical(f"Output directory {output_dir} exists. Use --fo/--force-overwrite to automatically overwrite it")
             sys.exit(1)
