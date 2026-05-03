@@ -1065,7 +1065,7 @@ def compute_mum_perm(mums_order, finalfiles, ref):
     if ref_name.endswith('.ref'):
         ref_name = ref_name[:-4]
     abs_final = {os.path.abspath(f): i + 1 for i, f in enumerate(finalfiles)}
-    stem_final = {Path(f).stem: i + 1 for i, f in enumerate(finalfiles)}
+    name_final = {Path(f).name: i + 1 for i, f in enumerate(finalfiles)}
     perm = []
     for genome_path in mums_order:
         is_ref = (os.path.abspath(genome_path) == ref_abs or
@@ -1073,7 +1073,7 @@ def compute_mum_perm(mums_order, finalfiles, ref):
         if is_ref:
             perm.append(0)
         else:
-            idx = abs_final.get(os.path.abspath(genome_path)) or stem_final.get(Path(genome_path).stem)
+            idx = abs_final.get(os.path.abspath(genome_path)) or name_final.get(Path(genome_path).name)
             if idx is None:
                 logger.warning(f"{Path(genome_path).name} from .lengths not found in query genomes; permutation may be wrong")
                 idx = 0
