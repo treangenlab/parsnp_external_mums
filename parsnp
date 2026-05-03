@@ -1586,10 +1586,14 @@ SETTINGS:
     if args.external_mums:
         mums_order = read_mums_lengths_order(args.external_mums, ref)
         if mums_order:
-            # Restore any genomes that appear in .lengths but were dropped by the
-            # ANI filter, so every column in the .mums file maps to a loaded genome.
+            # Restore any genomes that appear in .lengths but were dropped by ANI
+            # or length filtering, so every column in the .mums file maps to a
+            # loaded genome.  fnafiles excludes length-rejected files, but
+            # input_files still contains them (only parse failures are removed).
             fnafiles_by_name = {Path(f).name: f for f in fnafiles}
             fnafiles_by_stem = {Path(f).stem: f for f in fnafiles}
+            input_by_name = {Path(f).name: f for f in input_files}
+            input_by_stem = {Path(f).stem: f for f in input_files}
             finalfile_names = {Path(f).name for f in finalfiles}
             finalfile_stems = {Path(f).stem for f in finalfiles}
             restored = []
@@ -1598,14 +1602,15 @@ SETTINGS:
                 gstem = Path(genome_path).stem
                 if gname in finalfile_names or gstem in finalfile_stems:
                     continue
-                f = fnafiles_by_name.get(gname) or fnafiles_by_stem.get(gstem)
+                f = (fnafiles_by_name.get(gname) or fnafiles_by_stem.get(gstem) or
+                     input_by_name.get(gname) or input_by_stem.get(gstem))
                 if f is not None:
                     finalfiles.append(f)
                     finalfile_names.add(Path(f).name)
                     finalfile_stems.add(Path(f).stem)
                     restored.append(gname)
             if restored:
-                logger.info(f"Restored {len(restored)} ANI-filtered genome(s) to finalfiles for external MUM column mapping.")
+                logger.info(f"Restored {len(restored)} filtered genome(s) to finalfiles for external MUM column mapping.")
             args._mum_perm = compute_mum_perm(mums_order, finalfiles, ref)
             logger.info("Computed MUM column permutation from .lengths file.")
         else:
