@@ -1590,6 +1590,11 @@ SETTINGS:
             # or length filtering, so every column in the .mums file maps to a
             # loaded genome.  fnafiles excludes length-rejected files, but
             # input_files still contains them (only parse failures are removed).
+            ref_name_r = Path(ref).name
+            if ref_name_r.endswith('.ref'):
+                ref_name_r = ref_name_r[:-4]
+            ref_stem_r = Path(ref_name_r).stem
+            ref_abs_r = os.path.abspath(ref)
             fnafiles_by_name = {Path(f).name: f for f in fnafiles}
             fnafiles_by_stem = {Path(f).stem: f for f in fnafiles}
             input_by_name = {Path(f).name: f for f in input_files}
@@ -1600,6 +1605,11 @@ SETTINGS:
             for genome_path in mums_order:
                 gname = Path(genome_path).name
                 gstem = Path(genome_path).stem
+                # Never add the reference into finalfiles — it is genome index 0,
+                # not a query, and adding it inflates this->n in the C aligner.
+                if (gstem == ref_stem_r or gname == ref_name_r or
+                        os.path.abspath(genome_path) == ref_abs_r):
+                    continue
                 if gname in finalfile_names or gstem in finalfile_stems:
                     continue
                 f = (fnafiles_by_name.get(gname) or fnafiles_by_stem.get(gstem) or
