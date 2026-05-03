@@ -1064,16 +1064,21 @@ def compute_mum_perm(mums_order, finalfiles, ref):
     # Strip ".ref" suffix that parsnp appends during reference contig-length sorting
     if ref_name.endswith('.ref'):
         ref_name = ref_name[:-4]
+    ref_stem = Path(ref_name).stem
     abs_final = {os.path.abspath(f): i + 1 for i, f in enumerate(finalfiles)}
     name_final = {Path(f).name: i + 1 for i, f in enumerate(finalfiles)}
+    stem_final = {Path(f).stem: i + 1 for i, f in enumerate(finalfiles)}
     perm = []
     for genome_path in mums_order:
         is_ref = (os.path.abspath(genome_path) == ref_abs or
-                  Path(genome_path).name == ref_name)
+                  Path(genome_path).name == ref_name or
+                  Path(genome_path).stem == ref_stem)
         if is_ref:
             perm.append(0)
         else:
-            idx = abs_final.get(os.path.abspath(genome_path)) or name_final.get(Path(genome_path).name)
+            idx = (abs_final.get(os.path.abspath(genome_path)) or
+                   name_final.get(Path(genome_path).name) or
+                   stem_final.get(Path(genome_path).stem))
             if idx is None:
                 logger.warning(f"{Path(genome_path).name} from .lengths not found in query genomes; permutation may be wrong")
                 idx = 0
@@ -1581,6 +1586,26 @@ SETTINGS:
     if args.external_mums:
         mums_order = read_mums_lengths_order(args.external_mums, ref)
         if mums_order:
+            # Restore any genomes that appear in .lengths but were dropped by the
+            # ANI filter, so every column in the .mums file maps to a loaded genome.
+            fnafiles_by_name = {Path(f).name: f for f in fnafiles}
+            fnafiles_by_stem = {Path(f).stem: f for f in fnafiles}
+            finalfile_names = {Path(f).name for f in finalfiles}
+            finalfile_stems = {Path(f).stem for f in finalfiles}
+            restored = []
+            for genome_path in mums_order:
+                gname = Path(genome_path).name
+                gstem = Path(genome_path).stem
+                if gname in finalfile_names or gstem in finalfile_stems:
+                    continue
+                f = fnafiles_by_name.get(gname) or fnafiles_by_stem.get(gstem)
+                if f is not None:
+                    finalfiles.append(f)
+                    finalfile_names.add(Path(f).name)
+                    finalfile_stems.add(Path(f).stem)
+                    restored.append(gname)
+            if restored:
+                logger.info(f"Restored {len(restored)} ANI-filtered genome(s) to finalfiles for external MUM column mapping.")
             args._mum_perm = compute_mum_perm(mums_order, finalfiles, ref)
             logger.info("Computed MUM column permutation from .lengths file.")
         else:
