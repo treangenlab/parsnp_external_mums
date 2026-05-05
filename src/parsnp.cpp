@@ -941,9 +941,9 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
                 }
                 for (ssize i = 0; i < nnum; i++)
                 {
-                    for (overlap=0, pos = 0; pos < tempalign2[z][i].size(); pos++)
+                    for (overlap=0, pos = 0; pos < cols_to_trim; pos++)
                     {
-                        if (tempalign2[z][0][pos] != '-')
+                        if (tempalign2[z][i][pos] != '-')
                             overlap++;
                     }
                     ct.start[i] += overlap;
