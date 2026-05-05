@@ -1145,45 +1145,52 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
     
     
     long avg = 0;
-    vector<long> coverage;
+    vector<long> coverage(n, 0);
     long totcoverage =0;
     long totsize = 0;
-    
-    
-    for ( ssize i = 0; i < n; i ++ )
-    {
-        coverage.push_back(0);
-    }
-    
-    
-    for ( ssize i = 0; i < n; i ++ )
-    {
-        if ( 1)
-        {
-            for ( vector<Cluster>::iterator ct = this->clusters.begin(); ct != this->clusters.end(); ct++)
-            {
-                if (!ct->type || ct->mums.size()<=0)
-                    continue;
 
-                if(ct->mums.at(0).isforward.at(i))
-                {
-                    coverage.at(i) += abs((ct->mums.back().start.at(i)+ct->mums.back().length)-ct->mums.front().start.at(i));
-                    if (i == 0)
-                    {
-                        avg += abs((ct->mums.back().start.at(i)+ct->mums.back().length)-ct->mums.front().start.at(i));
-                    }
-                }
-                else
-                {
-                    coverage.at(i) += abs((ct->mums.front().start.at(i)+ct->mums.front().length)-ct->mums.back().start.at(i));
-                    if (i == 0)
-                    {
-                        avg += abs((ct->mums.front().start.at(i)+ct->mums.front().length)-ct->mums.back().start.at(i));
-                    }
-                }
-                
-            }
+    // Compute average cluster length from reference genome (genome 0)
+    for ( vector<Cluster>::iterator ct = this->clusters.begin(); ct != this->clusters.end(); ct++)
+    {
+        if (!ct->type || ct->mums.size()<=0)
+            continue;
+        if(ct->mums.at(0).isforward.at(0))
+            avg += abs((long)(ct->mums.back().start.at(0)+ct->mums.back().length)-(long)ct->mums.front().start.at(0));
+        else
+            avg += abs((long)(ct->mums.front().start.at(0)+ct->mums.front().length)-(long)ct->mums.back().start.at(0));
+    }
+
+    // Compute coverage per genome using interval merging to avoid double-counting
+    // overlapping cluster spans (which can occur with externally supplied MUMs).
+    for ( ssize i = 0; i < n; i ++ )
+    {
+        vector<pair<long,long>> ivs;
+        int cnum = 0;
+        for ( vector<Cluster>::iterator ct = this->clusters.begin(); ct != this->clusters.end(); ct++)
+        {
+            if (!ct->type || ct->mums.size()<=0)
+                continue;
+            long s = min((long)ct->mums.front().start.at(i), (long)ct->mums.back().start.at(i));
+            long e = max((long)ct->mums.front().start.at(i)+(long)ct->mums.front().length,
+                         (long)ct->mums.back().start.at(i)+(long)ct->mums.back().length);
+            log << "  [DEBUG] seq " << i+1 << " cluster " << ++cnum
+                << " span=[" << s << "," << e << "] length=" << (e-s) << " bps" << endl;
+            ivs.push_back({s, e});
         }
+        sort(ivs.begin(), ivs.end());
+        long merged = 0, cs = -1, ce = -1;
+        int overlaps = 0;
+        for ( auto& iv : ivs )
+        {
+            if (cs < 0)              { cs = iv.first; ce = iv.second; }
+            else if (iv.first <= ce) { ce = max(ce, iv.second); overlaps++; }
+            else { merged += ce - cs; cs = iv.first; ce = iv.second; }
+        }
+        if (cs >= 0) merged += ce - cs;
+        if (overlaps > 0)
+            log << "  [DEBUG] seq " << i+1 << " had " << overlaps
+                << " overlapping cluster span(s) — merged coverage=" << merged << " bps" << endl;
+        coverage.at(i) = merged;
     }
     
     log << setw(2) << "Average cluster length:   "<< avg/ccount <<  " bps" << endl;
