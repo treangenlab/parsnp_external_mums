@@ -46,6 +46,8 @@ VERSION = __version__
 PHI_WINDOWSIZE = 1000
 TOTSEQS=0
 PARSNP_DIR = sys.path[0]
+_CONDA_HARVESTTOOLS = "/opt/miniconda3/envs/parsnp2/bin/harvesttools"
+HARVESTTOOLS = _CONDA_HARVESTTOOLS if os.path.exists(_CONDA_HARVESTTOOLS) else "harvesttools"
 
 
 
@@ -440,6 +442,16 @@ def parse_args():
         type = int,
         default = 21,
         help = "Minimum cluster size")
+    MUM_search_args.add_argument(
+        "--external-mums",
+        type = str,
+        default = None,
+        metavar = "FILE",
+        help = "mumemto .mums file of externally-computed MUM locations (skips internal MUM search). "
+               "Format: length<TAB>pos0,pos1,...<TAB>strand0,strand1,... "
+               "Positions are 0-based, in the same order as input genomes. "
+               "Strand is +/-. Lines starting with '#' are ignored. "
+               "Partial MUMs (empty position entries) are skipped.")
     #TODO -z was a duplicate flag but no longer parsed as min-lcb-size in the current parsnp version
     # MUM_search_args.add_argument(
             # "-z",
@@ -696,7 +708,8 @@ def check_for_dependencies(use_phipack, use_fasttree):
     '''
     missing = False
     exe = "harvesttools"
-    if shutil.which(exe) is None:
+    CONDA_HARVESTTOOLS = "/opt/miniconda3/envs/parsnp2/bin/harvesttools"
+    if shutil.which(exe) is None and not os.path.exists(CONDA_HARVESTTOOLS):
         missing = True
         logger.critical("{} not in system path!".format(exe))
     if use_phipack:
@@ -740,7 +753,7 @@ def create_output_directory(output_dir, overwrite=False):
     if os.path.exists(output_dir):
         if overwrite:
             logger.warning(f"Output directory {output_dir} exists, all results will be overwritten")
-            shutil.rmtree(output_dir)
+            shutil.rmtree(output_dir, ignore_errors=True)
         else:
             logger.critical(f"Output directory {output_dir} exists. Use --fo/--force-overwrite to automatically overwrite it")
             sys.exit(1)
@@ -1019,6 +1032,60 @@ def parse_input_files(input_files, curated, validate_input):
     return input_files, fnafiles, fnaf_sizes
 
 
+def read_mums_lengths_order(mums_path, ref):
+    """Return mumemto's genome order (including ref) from the .lengths file, or None if not found."""
+    lengths_path = os.path.splitext(mums_path)[0] + '.lengths'
+    if not os.path.exists(lengths_path):
+        logger.warning(f"No .lengths file found at {lengths_path}; MUM column mapping may be wrong")
+        return None
+
+    seen = set()
+    mums_order = []
+    with open(lengths_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            genome_path = line.split()[0]
+            if genome_path not in seen:
+                seen.add(genome_path)
+                mums_order.append(genome_path)
+    return mums_order
+
+
+def compute_mum_perm(mums_order, finalfiles, ref):
+    """
+    Compute column→genome permutation for setFinalClustersFromTSV.
+    perm[j] = parsnp genome index (0 for reference, 1-based for queries) for MUM file column j.
+    The .mums file includes the reference as column 0, so the permutation must cover all columns.
+    """
+    ref_abs = os.path.abspath(ref)
+    ref_name = Path(ref).name
+    # Strip ".ref" suffix that parsnp appends during reference contig-length sorting
+    if ref_name.endswith('.ref'):
+        ref_name = ref_name[:-4]
+    ref_stem = Path(ref_name).stem
+    abs_final = {os.path.abspath(f): i + 1 for i, f in enumerate(finalfiles)}
+    name_final = {Path(f).name: i + 1 for i, f in enumerate(finalfiles)}
+    stem_final = {Path(f).stem: i + 1 for i, f in enumerate(finalfiles)}
+    perm = []
+    for genome_path in mums_order:
+        is_ref = (os.path.abspath(genome_path) == ref_abs or
+                  Path(genome_path).name == ref_name or
+                  Path(genome_path).stem == ref_stem)
+        if is_ref:
+            perm.append(0)
+        else:
+            idx = (abs_final.get(os.path.abspath(genome_path)) or
+                   name_final.get(Path(genome_path).name) or
+                   stem_final.get(Path(genome_path).stem))
+            if idx is None:
+                logger.warning(f"{Path(genome_path).name} from .lengths not found in query genomes; permutation may be wrong")
+                idx = 0
+            perm.append(idx)
+    return perm
+
+
 def write_inifile_1(args, ref, aligner, recomb_filter, output_dir, fastmum, reflen, fnafiles, threads):
     '''
     Writes the first .ini file. Starts with 'template.ini' in the parsnp folder and replaces various
@@ -1117,6 +1184,14 @@ def write_inifile_2(inifiled, outputDir, unaligned, args, auto_ref, query, final
     inifiled = inifiled.replace("$FILES\n", file_string)
     # new, output unaligned regions
     inifiled = inifiled.replace("$UNALIGNED", unaligned)
+    logger.debug(f"external_mums value: {args.external_mums!r}")
+    if args.external_mums:
+        inifiled = inifiled.replace("extmumfile=", "extmumfile=%s" % os.path.abspath(args.external_mums))
+        logger.debug(f"Set extmumfile to: {os.path.abspath(args.external_mums)}")
+        if hasattr(args, '_mum_perm') and args._mum_perm:
+            perm_str = ','.join(str(x) for x in args._mum_perm)
+            inifiled = inifiled.replace("mumperm=", "mumperm=%s" % perm_str)
+            logger.debug(f"Set mumperm: {perm_str[:80]}...")
     inifiled_closest = inifiled.replace("$FILES\n", file_string_closest)
     if fastmum:
         inifiled = inifiled.replace("p=%d" % (0.2 * reflen), "p=%s" % (args.max_partition_size))
@@ -1148,12 +1223,13 @@ def run_parsnp_aligner(outputDir):
         # rc = run_command(command, ignorerc=1, stdout=stdout_f, stderr=stderr_f, prepend_time=True)
     rc = run_logged_command(command=command, ignorerc=1, label="parsnp-aligner", outputDir=outputDir)
 
-    if not os.path.exists(os.path.join(outputDir, "parsnpAligner.xmfa")) or rc != 0:
+    xmfa_path = os.path.join(outputDir, "parsnpAligner.xmfa")
+    if not os.path.exists(xmfa_path):
         logger.critical("Set of filtered genomes are too divergent for parsnp, please use stricter ANI thresholds for filtering")
     else:
-        shutil.move(
-                os.path.join(outputDir, "parsnpAligner.xmfa"),
-                os.path.join(outputDir, "parsnp.xmfa"))
+        if rc != 0:
+            logger.warning("parsnp_core exited with non-zero status but xmfa was produced, continuing...")
+        shutil.move(xmfa_path, os.path.join(outputDir, "parsnp.xmfa"))
     return rc
 
 
@@ -1321,8 +1397,7 @@ SETTINGS:
     # Uses biopython to parse the inputs (just checking it again)
     input_files, fnafiles, fnaf_sizes = parse_input_files(input_files, curated, args.validate_input)
 
-    # if ref in fnafiles:
-        # fnafiles.remove(ref)
+    fnafiles = [f for f in fnafiles if os.path.abspath(f) != os.path.abspath(ref)]
 
     #sort reference by largest replicon to smallest
     if sortem and os.path.exists(ref) and not autopick_ref:
@@ -1508,12 +1583,56 @@ SETTINGS:
 
     finalfiles = sorted(finalfiles)
     random_seeded.shuffle(finalfiles)
+    if args.external_mums:
+        mums_order = read_mums_lengths_order(args.external_mums, ref)
+        if mums_order:
+            # Restore any genomes that appear in .lengths but were dropped by ANI
+            # or length filtering, so every column in the .mums file maps to a
+            # loaded genome.  fnafiles excludes length-rejected files, but
+            # input_files still contains them (only parse failures are removed).
+            ref_name_r = Path(ref).name
+            if ref_name_r.endswith('.ref'):
+                ref_name_r = ref_name_r[:-4]
+            ref_stem_r = Path(ref_name_r).stem
+            ref_abs_r = os.path.abspath(ref)
+            fnafiles_by_name = {Path(f).name: f for f in fnafiles}
+            fnafiles_by_stem = {Path(f).stem: f for f in fnafiles}
+            input_by_name = {Path(f).name: f for f in input_files}
+            input_by_stem = {Path(f).stem: f for f in input_files}
+            finalfile_names = {Path(f).name for f in finalfiles}
+            finalfile_stems = {Path(f).stem for f in finalfiles}
+            restored = []
+            for genome_path in mums_order:
+                gname = Path(genome_path).name
+                gstem = Path(genome_path).stem
+                # Never add the reference into finalfiles — it is genome index 0,
+                # not a query, and adding it inflates this->n in the C aligner.
+                if (gstem == ref_stem_r or gname == ref_name_r or
+                        os.path.abspath(genome_path) == ref_abs_r):
+                    continue
+                if gname in finalfile_names or gstem in finalfile_stems:
+                    continue
+                f = (fnafiles_by_name.get(gname) or fnafiles_by_stem.get(gstem) or
+                     input_by_name.get(gname) or input_by_stem.get(gstem))
+                if f is not None:
+                    finalfiles.append(f)
+                    finalfile_names.add(Path(f).name)
+                    finalfile_stems.add(Path(f).stem)
+                    restored.append(gname)
+            if restored:
+                logger.info(f"Restored {len(restored)} filtered genome(s) to finalfiles for external MUM column mapping.")
+            args._mum_perm = compute_mum_perm(mums_order, finalfiles, ref)
+            logger.info("Computed MUM column permutation from .lengths file.")
+        else:
+            args._mum_perm = []
     totseqs = len(finalfiles) + 1 # Add one to include reference
 
     #initiate parallelPhiPack tasks
     #3)run parsnp (cores, grid?)
-    if args.no_partition or len(finalfiles) < 2*args.min_partition_size:
-        if not args.no_partition and len(finalfiles) < 2*args.min_partition_size:
+    if args.no_partition or args.external_mums or len(finalfiles) < 2*args.min_partition_size:
+        if args.external_mums and not args.no_partition:
+            logger.info("External MUMs file provided; skipping partitioning (MUM positions are indexed to the full genome set).")
+        elif not args.no_partition and len(finalfiles) < 2*args.min_partition_size:
             logger.info(f"Too few genomes to run partitions of size >{args.min_partition_size}. Running all genomes at once.")
         # Editing the ini file to be used for parnsp-aligner (which is different from parsnip as a mumi finder)
         if not inifile_exists:
@@ -1772,28 +1891,38 @@ SETTINGS:
 
     #add genbank here, if present
     if len(genbank_ref) != 0:
-        rnc = f"harvesttools -q -o {outputDir}/parsnp.ggr -x {parsnp_output}"
+        rnc = f"{HARVESTTOOLS} -q -o {outputDir}/parsnp.ggr -x {parsnp_output}"
         for file in genbank_files:
             rnc += " -g %s " %(file)
         command = rnc
     else:
-        command = f"harvesttools -q -o {outputDir}/parsnp.ggr -f {ref} -x {parsnp_output}"
+        command = f"{HARVESTTOOLS} -q -o {outputDir}/parsnp.ggr -f {ref} -x {parsnp_output}"
 
     # Harvest seems to fail sometimes when piping to stderr/stdout...
-    run_command(command)
+    # When --external-mums is used, harvesttools may crash on alignment blocks whose
+    # sequences differ across genomes; treat failure as non-fatal so the XMFA is kept.
+    ggr_path = f"{outputDir}/parsnp.ggr"
+    ggr_rc = run_command(command, ignorerc=1)
+    ggr_ok = (ggr_rc == 0 and os.path.exists(ggr_path) and os.path.getsize(ggr_path) > 0)
+    if not ggr_ok:
+        logger.warning(
+            "harvesttools XMFA → GGR conversion failed (exit code %d). "
+            "parsnp.ggr will not be produced; SNP blocks and VCF will be skipped. "
+            "parsnp.xmfa is still available for downstream analysis." % ggr_rc)
 
-    if recomb_filter:
-        command = "harvesttools -q -b %s/parsnp.rec,REC,\"PhiPack\" -o %s/parsnp.ggr -i %s/parsnp.ggr"%(outputDir,outputDir,outputDir)
+    if ggr_ok and recomb_filter:
+        command = f"{HARVESTTOOLS} -q -b {outputDir}/parsnp.rec,REC,\"PhiPack\" -o {outputDir}/parsnp.ggr -i {outputDir}/parsnp.ggr"
         run_command(command)
 
-    run_logged_command(
-        f"harvesttools -i {outputDir}/parsnp.ggr -S {outputDir}/parsnp.snps.mblocks",
-        outputDir=outputDir,
-        label="harvest-mblocks")
-
-    if generate_vcf:
+    if ggr_ok:
         run_logged_command(
-            f"harvesttools -q -i {outputDir}/parsnp.ggr -V {outputDir+os.sep}parsnp.vcf", 
+            f"{HARVESTTOOLS} -i {outputDir}/parsnp.ggr -S {outputDir}/parsnp.snps.mblocks",
+            outputDir=outputDir,
+            label="harvest-mblocks")
+
+    if ggr_ok and generate_vcf:
+        run_logged_command(
+            f"{HARVESTTOOLS} -q -i {outputDir}/parsnp.ggr -V {outputDir+os.sep}parsnp.vcf",
             outputDir, label="harvest-vcf")
         with open(f"{outputDir}/parsnp.vcf", 'r') as vcf_orig:
             vcf_contents = vcf_orig.read()
@@ -1801,7 +1930,7 @@ SETTINGS:
             vcf_fixed.write("##fileformat=VCFv4.2\n")
             vcf_fixed.write(vcf_contents)
 
-    if not args.skip_phylogeny:
+    if not args.skip_phylogeny and ggr_ok:
         logger.info("Reconstructing core genome phylogeny...")
         mblocks_seqs = SeqIO.parse(os.path.join(outputDir, "parsnp.snps.mblocks"), "fasta")
         for seq in mblocks_seqs:
@@ -1853,7 +1982,7 @@ SETTINGS:
             if recomb_filter or 1:
                 #if newick available, add
                 #new flag to update branch lengths
-                run_command("harvesttools --midpoint-reroot -u -q -i "+outputDir+os.sep+"parsnp.ggr -o "+outputDir+os.sep+"parsnp.ggr -n %s"%(outputDir+os.sep+"parsnp.tree "))
+                run_command("{HARVESTTOOLS} --midpoint-reroot -u -q -i "+outputDir+os.sep+"parsnp.ggr -o "+outputDir+os.sep+"parsnp.ggr -n %s"%(outputDir+os.sep+"parsnp.tree "))
 
 
     t2 = time.time()

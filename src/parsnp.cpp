@@ -919,6 +919,7 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
     }
 
     int prev_end = 0;
+    int written_cluster_number = 0;
     for ( ssize z = 0; z < allclusters.size(); z++)
     {
         Cluster ct = allclusters.at(z);
@@ -940,9 +941,9 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
                 }
                 for (ssize i = 0; i < nnum; i++)
                 {
-                    for (overlap=0, pos = 0; pos < tempalign2[z][i].size(); pos++)
+                    for (overlap=0, pos = 0; pos < cols_to_trim; pos++)
                     {
-                        if (tempalign2[z][0][pos] != '-')
+                        if (tempalign2[z][i][pos] != '-')
                             overlap++;
                     }
                     ct.start[i] += overlap;
@@ -953,7 +954,8 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
 
             if (tempalign2[z][0].size() > this->c * 1)
             {
-                sprintf(b,"%d",(int)z+1);// C-style string formed without null
+                written_cluster_number++;
+                sprintf(b,"%d", written_cluster_number);// sequential, not raw z+1
                 ofstream clcbfile;
                 if (recomb_filter)
                 {
@@ -1029,7 +1031,7 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
                         int offset = 0;
                         if (hdr1 == ""){
                             hdr1 = "s1";
-                            offset = -1;
+                            offset = 0;
                         } // Cannot have empty header very hard to parse
                         else if (hdr1 != "s1") 
                         {
@@ -1096,6 +1098,25 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
     log <<  setw(2) << "q value:   " << setw(2) << this->q << endl << endl;
     log << setw(2) << "Mum anchor size:   " << setw(2) << this->l << endl;
     log << setw(2) <<"Number of MUM anchors found:   "<< setw(2) << this->m0 << endl;
+    ofstream mumdump((this->outdir + "/debug_final_mums.tsv").c_str());
+
+    for (size_t mi = 0; mi < this->mums.size(); mi++) {
+        TMum mt = this->mums.at(mi);
+
+        mumdump << mi << "\t" << mt.length;
+
+        for (ssize k = 0; k < this->n; k++) {
+            mumdump << "\t" << mt.start.at(k);
+        }
+
+        for (ssize k = 0; k < this->n; k++) {
+            mumdump << "\t" << (mt.isforward.at(k) ? "+" : "-");
+        }
+
+        mumdump << "\n";
+    }
+
+    mumdump.close();
     if((this->mums.size()+this->filtered)>=this->m0)
         log << setw(2) <<  "Number of MUMs found:   "   << setw(2) << (this->mums.size()+this->filtered)-(this->m0) << endl;
     else
@@ -1124,45 +1145,52 @@ void Aligner::writeOutput(string psnp,vector<float>& coveragerow)
     
     
     long avg = 0;
-    vector<long> coverage;
+    vector<long> coverage(n, 0);
     long totcoverage =0;
     long totsize = 0;
-    
-    
-    for ( ssize i = 0; i < n; i ++ )
-    {
-        coverage.push_back(0);
-    }
-    
-    
-    for ( ssize i = 0; i < n; i ++ )
-    {
-        if ( 1)
-        {
-            for ( vector<Cluster>::iterator ct = this->clusters.begin(); ct != this->clusters.end(); ct++)
-            {
-                if (!ct->type || ct->mums.size()<=0)
-                    continue;
 
-                if(ct->mums.at(0).isforward.at(i))
-                {
-                    coverage.at(i) += abs((ct->mums.back().start.at(i)+ct->mums.back().length)-ct->mums.front().start.at(i));
-                    if (i == 0)
-                    {
-                        avg += abs((ct->mums.back().start.at(i)+ct->mums.back().length)-ct->mums.front().start.at(i));
-                    }
-                }
-                else
-                {
-                    coverage.at(i) += abs((ct->mums.front().start.at(i)+ct->mums.front().length)-ct->mums.back().start.at(i));
-                    if (i == 0)
-                    {
-                        avg += abs((ct->mums.front().start.at(i)+ct->mums.front().length)-ct->mums.back().start.at(i));
-                    }
-                }
-                
-            }
+    // Compute average cluster length from reference genome (genome 0)
+    for ( vector<Cluster>::iterator ct = this->clusters.begin(); ct != this->clusters.end(); ct++)
+    {
+        if (!ct->type || ct->mums.size()<=0)
+            continue;
+        if(ct->mums.at(0).isforward.at(0))
+            avg += abs((long)(ct->mums.back().start.at(0)+ct->mums.back().length)-(long)ct->mums.front().start.at(0));
+        else
+            avg += abs((long)(ct->mums.front().start.at(0)+ct->mums.front().length)-(long)ct->mums.back().start.at(0));
+    }
+
+    // Compute coverage per genome using interval merging to avoid double-counting
+    // overlapping cluster spans (which can occur with externally supplied MUMs).
+    for ( ssize i = 0; i < n; i ++ )
+    {
+        vector<pair<long,long>> ivs;
+        int cnum = 0;
+        for ( vector<Cluster>::iterator ct = this->clusters.begin(); ct != this->clusters.end(); ct++)
+        {
+            if (!ct->type || ct->mums.size()<=0)
+                continue;
+            long s = min((long)ct->mums.front().start.at(i), (long)ct->mums.back().start.at(i));
+            long e = max((long)ct->mums.front().start.at(i)+(long)ct->mums.front().length,
+                         (long)ct->mums.back().start.at(i)+(long)ct->mums.back().length);
+            log << "  [DEBUG] seq " << i+1 << " cluster " << ++cnum
+                << " span=[" << s << "," << e << "] length=" << (e-s) << " bps" << endl;
+            ivs.push_back({s, e});
         }
+        sort(ivs.begin(), ivs.end());
+        long merged = 0, cs = -1, ce = -1;
+        int overlaps = 0;
+        for ( auto& iv : ivs )
+        {
+            if (cs < 0)              { cs = iv.first; ce = iv.second; }
+            else if (iv.first <= ce) { ce = max(ce, iv.second); overlaps++; }
+            else { merged += ce - cs; cs = iv.first; ce = iv.second; }
+        }
+        if (cs >= 0) merged += ce - cs;
+        if (overlaps > 0)
+            log << "  [DEBUG] seq " << i+1 << " had " << overlaps
+                << " overlapping cluster span(s) — merged coverage=" << merged << " bps" << endl;
+        coverage.at(i) = merged;
     }
     
     log << setw(2) << "Average cluster length:   "<< avg/ccount <<  " bps" << endl;
@@ -2458,6 +2486,236 @@ bool Aligner::setInterClusterRegions( void )
     this->clusters.insert(this->clusters.begin(), interclusters.begin(),interclusters.end());
     return 1;
 }
+/////////////////////////////////////////
+// Aligner::setFinalClustersFromTSV
+// Load MUM locations from a mumemto .mums file and build LCBs.
+//
+// Format matches mumemto output (one MUM per line, lines starting with '#' are ignored):
+//   length \t pos0,pos1,...,posN \t strand0,strand1,...,strandN
+//
+// Positions are 0-based offsets within each sequence, in the same order as the
+// input filelist passed to parsnp. Strand is '+' (forward) or '-' (reverse complement).
+// Strand field is optional; all genomes are assumed forward if omitted.
+// Lines where any position is empty (mumemto partial MUMs via -k) are skipped.
+/////////////////////////////////////////
+void Aligner::setFinalClustersFromTSV(string tsvPath, vector<int> perm)
+{
+    ifstream is(tsvPath.c_str());
+    if (!is.good()) {
+        cerr << "ERROR: cannot open external MUM file: " << tsvPath << endl;
+        return;
+    }
+
+    struct ExtMum {
+        long length;
+        vector<long> pos;
+        vector<int> forward;
+    };
+
+    vector<ExtMum> extmums;
+    string line;
+
+    while (getline(is, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        istringstream ss(line);
+
+        ExtMum em;
+        if (!(ss >> em.length)) continue;
+
+        string pos_field;
+        if (!(ss >> pos_field)) continue;
+
+        bool skip = false;
+        string token;
+        istringstream pos_ss(pos_field);
+
+        while (getline(pos_ss, token, ',')) {
+            if (token.empty()) {
+                skip = true;
+                break;
+            }
+            em.pos.push_back(atol(token.c_str()));
+        }
+
+        ssize expected_cols = (ssize)em.pos.size();
+        if (skip) continue;
+        if (expected_cols != this->n && expected_cols != this->n - 1) continue;
+
+        ssize ncols = expected_cols;
+
+        string strand_field;
+        if (ss >> strand_field) {
+            istringstream strand_ss(strand_field);
+            while (getline(strand_ss, token, ',')) {
+                em.forward.push_back(token == "+" ? 1 : 0);
+            }
+        }
+
+        if ((ssize)em.forward.size() != ncols) {
+            em.forward.clear();
+            for (ssize i = 0; i < ncols; i++)
+                em.forward.push_back(1);
+        }
+
+        extmums.push_back(em);
+    }
+
+    is.close();
+
+    if (extmums.empty()) {
+        cerr << "ERROR: no valid external MUMs loaded from " << tsvPath << endl;
+        return;
+    }
+
+    bool no_ref_col = ((ssize)extmums[0].pos.size() == this->n - 1);
+    if (no_ref_col)
+        cerr << "External MUM file has " << (this->n - 1) << " columns (queries only); "
+             << "will locate reference positions by sequence search" << endl;
+
+    // perm[j] = parsnp genome index for MUM column j (written by Python from .lengths file).
+    // Falls back to identity mapping if perm is empty (no .lengths file found).
+
+    // Compute min anchor size the same way setMums1 does for the initial full-genome search,
+    // so that external MUMs below the --min-anchor-length threshold are excluded.
+    string anchor_sOutput;
+    Converter(this->minanchor, anchor_sOutput, 80);
+    int min_anchor_len = int(ceil(Calculator(anchor_sOutput, anchor_sOutput.length(),
+                                             (float)this->genomes[0].size())));
+
+    // Open per-row rejection log next to the aligner log.
+    string reject_log_path = this->outdir + "/log/extmum_rejected.tsv";
+    ofstream rlog(reject_log_path.c_str());
+    if (rlog.is_open())
+        rlog << "row\tlength\treason\tgenome_idx\tpos\tgenome_size\tnote\n";
+
+    int loaded = 0;
+    int skipped_short = 0, skipped_bounds_perm = 0, skipped_bounds_mum = 0;
+    int skipped_ref = 0;
+
+    for (size_t r = 0; r < extmums.size(); r++) {
+        ExtMum &em = extmums[r];
+        long row = (long)(r + 1);
+
+        if (em.length < min_anchor_len) {
+            skipped_short++;
+            if (rlog.is_open())
+                rlog << row << "\t" << em.length << "\tshort\t.\t.\t.\t"
+                     << "min_anchor=" << min_anchor_len << "\n";
+            continue;
+        }
+
+        vector<long> startpos(this->n, -1);
+        vector<int> forward(this->n, 1);
+
+        ssize ncols = (ssize)em.pos.size();
+        bool bad = false;
+        int bad_g = -1;
+        for (ssize j = 0; j < ncols; j++) {
+            int g;
+            if (!perm.empty() && j < (ssize)perm.size())
+                g = perm[j];
+            else
+                g = no_ref_col ? (int)(j + 1) : (int)j;
+            startpos[g] = em.pos[j];
+            forward[g] = em.forward[j];
+            if (startpos[g] < 0 || startpos[g] + em.length > (long)this->genomes[g].size()) {
+                bad = true; bad_g = g; break;
+            }
+        }
+        if (bad) {
+            skipped_bounds_perm++;
+            if (rlog.is_open())
+                rlog << row << "\t" << em.length << "\tbounds_perm\t" << bad_g
+                     << "\t" << startpos[bad_g]
+                     << "\t" << this->genomes[bad_g].size()
+                     << "\tend=" << (startpos[bad_g] + em.length) << "\n";
+            continue;
+        }
+
+        if (no_ref_col) {
+            // Find the reference position by searching for the MUM sequence in genome[0].
+            string mum_seq = this->genomes[1].substr(startpos[1], em.length);
+            if (!forward[1]) mum_seq = reversec(mum_seq);
+
+            const string &ref = this->genomes[0];
+            long ref_pos = -1;
+            int ref_fwd = 1;
+
+            size_t hit = ref.find(mum_seq);
+            if (hit != string::npos && ref.find(mum_seq, hit + 1) == string::npos) {
+                ref_pos = (long)hit; ref_fwd = 1;
+            } else {
+                string mum_rc = reversec(mum_seq);
+                hit = ref.find(mum_rc);
+                if (hit != string::npos && ref.find(mum_rc, hit + 1) == string::npos) {
+                    ref_pos = (long)hit; ref_fwd = 0;
+                }
+            }
+
+            if (ref_pos < 0) {
+                skipped_ref++;
+                if (rlog.is_open())
+                    rlog << row << "\t" << em.length << "\tref_not_found\t0\t.\t"
+                         << this->genomes[0].size() << "\t.\n";
+                continue;
+            }
+            startpos[0] = ref_pos;
+            forward[0] = ref_fwd;
+        }
+
+        TMum mum(startpos, em.length);
+        mum.isforward = forward;
+
+        bad = false;
+        int bad_k = -1;
+        for (ssize k = 0; k < this->n; k++) {
+            long lo = mum.start[k];
+            long hi = mum.end[k];
+            long limit = (long)this->genomes.at(k).size();
+            if (lo < 0 || hi > limit) {
+                bad = true; bad_k = k; break;
+            }
+        }
+        if (bad) {
+            skipped_bounds_mum++;
+            if (rlog.is_open())
+                rlog << row << "\t" << em.length << "\tbounds_mum\t" << bad_k
+                     << "\t" << mum.start[bad_k]
+                     << "\t" << this->genomes[bad_k].size()
+                     << "\tend=" << mum.end[bad_k] << "\n";
+            continue;
+        }
+
+        for (ssize k = 0; k < this->n; k++) {
+            for (long m = mum.start[k]; m < mum.end[k]; m++)
+                this->mumlayout[k][m] = 1;
+        }
+
+        mum.slength = 10000;
+        this->anchors.push_back(mum);
+        this->mums.push_back(mum);
+        this->clusters.push_back(Cluster(mum));
+        loaded++;
+    }
+
+    if (rlog.is_open()) rlog.close();
+
+    cerr << "Loaded " << loaded << " external MUMs from " << tsvPath << endl;
+    if (skipped_short        > 0) cerr << "  Skipped " << skipped_short        << " (shorter than --min-anchor-length " << min_anchor_len << ")" << endl;
+    if (skipped_bounds_perm  > 0) cerr << "  Skipped " << skipped_bounds_perm  << " (position out of bounds during column→genome mapping)" << endl;
+    if (skipped_bounds_mum   > 0) cerr << "  Skipped " << skipped_bounds_mum   << " (position out of bounds after TMum construction)" << endl;
+    if (skipped_ref          > 0) cerr << "  Skipped " << skipped_ref          << " (reference position not uniquely found)" << endl;
+    cerr << "  Rejection details: " << reject_log_path << endl;
+
+    if (loaded == 0) {
+        cerr << "ERROR: 0 external MUMs passed validation, cannot continue." << endl;
+        exit(1);
+    }
+
+    this->m0 = (int)this->mums.size();
+}
+
 // {{{ void Aligner::setFinalClusters(string mumFileName)
 /////////////////////////////////////////
 // Aligner::setFinalClusters
@@ -2817,7 +3075,7 @@ int main ( int argc, char* argv[] )
     float diag_diff = 1.0;
     int random=0;
     float factor;
-    string mums,anchors,anchorfile,mumfile,prefix,outdir;
+    string mums,anchors,anchorfile,mumfile,extmumfile,prefix,outdir;
     bool reverseRef=false,reverse=false,anchorsOnly=false;
     bool reverseQuery=false;
     bool shustring = false;
@@ -2889,6 +3147,17 @@ int main ( int argc, char* argv[] )
     extendmums = iniFile.GetValueB( "MUM","extendmums");
     mums = iniFile.GetValue( "MUM","mums");
     mumfile = iniFile.GetValue( "MUM","mumfile");
+    extmumfile = iniFile.GetValue( "MUM","extmumfile");
+    string mumperm_str = iniFile.GetValue( "MUM","mumperm");
+    vector<int> mum_perm;
+    if (!mumperm_str.empty()) {
+        istringstream pss(mumperm_str);
+        string tok;
+        while (getline(pss, tok, ',')) {
+            if (!tok.empty())
+                mum_perm.push_back(atoi(tok.c_str()));
+        }
+    }
     random = iniFile.GetValueI( "MUM","filter");
     factor = iniFile.GetValueF( "MUM","factor");
     //factor = 1.5;
@@ -3202,16 +3471,22 @@ int main ( int argc, char* argv[] )
             return 0;
         }
     }
+    else if ( extmumfile.size() )
+    {
+        cerr << "Loading external MUMs as anchors..." << endl;
+        align.setFinalClustersFromTSV(extmumfile, mum_perm);
+        mumsfound = 1;
+    }
     else if ( ! mumfile.size() )
         mumsfound = align.setInitialClusters();
-    
+
     if (calc_mumi)
         exit(0);
-    
+
     time ( &end );
-    
+
     dif = difftime (end,start);
-    align.anchorTime = dif;    
+    align.anchorTime = dif;
     time ( &start);
     if ( ! anchorsOnly && ! mumfile.size() && ! shustring)
     {
@@ -3219,10 +3494,10 @@ int main ( int argc, char* argv[] )
         mumsfound = align.doWork();
     }
     time ( &end);
-    
+
     if ( !mumsfound && !mumfile.size())
     {
-        
+
         mfile << "NO MUMS FOUND" << endl;
         mfile.close();
         return 0;
@@ -3232,36 +3507,36 @@ int main ( int argc, char* argv[] )
         mfile << "MUMS FOUND" << endl;
         mfile.close();
     }
-    
+
     dif = difftime (end,start);
     printf("        Finished recursive MUM search, elapsed time: %.0lf seconds\n\n", dif );
     align.coarsenTime = dif;
-    
+
     if ( random && ! mumfile.size() )
     {
         cerr << "Filtering spurious matches..." << endl;
         time ( &start);
         align.random = random;
         align.filterRandom1(random);
-        
+
         //align.filterRandom();
         time ( &end);
         dif = difftime(end,start);
         printf("        Finished filtering spurious matches, elapsed time: %.0lf seconds\n\n",dif);
         align.randomTime = dif;
     }
-    
-    
+
+
     time ( &start);
-    
+
     cerr << "Creating and verifying final LCBs..." << endl;
     if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
         align.setFinalClusters();
-    
+
     align.filterRandomClustersSimple1();
-    
+
     if( mumfile.size())
         align.setFinalClusters(mumfile);
     else
